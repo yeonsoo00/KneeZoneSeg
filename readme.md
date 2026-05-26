@@ -1,5 +1,5 @@
 # Knee Growth Plate Zone Segmentation
-
+**Overview**
 Staining signals : Mineral(1), AC(2), Calcein(3), TRAP(4), DAPI(5), AP(6), EdU(7), CFO(8), SFO(9)
 (46 = 4 + 6 + 4 + 4 + 4 + 8 + 6 + 6 + 4)
 Number of masks per signal:
@@ -28,4 +28,9 @@ These are the examples of background images and predictions.
 | :---: | :---: | :---: |
 | <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/CCC_K10_M4_L1/trap.png?raw=true" width="250"/> | <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/overlay/4b_overlay.png?raw=true" width="250"/> | <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/overlay/4d_overlay.png?raw=true" width="250"/> |
 
+**Inference**
+After running inference, you would get predictions (masks) in png for all the lines we defined. If EdU is missing, a placeholder image will be saved. You have to specify your image-root and output-dir to run the code. 
 
+```
+python inference.py --image_root "where/your/images/are" --output_dir "where/you/want/to/save/results"
+```
