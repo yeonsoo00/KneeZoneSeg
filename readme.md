@@ -17,7 +17,15 @@ To get 9A, 9B we use SFO and CFO images. And 8E, 8F are defined from CFO and AP.
 (a,b) and (c,d) are representing the high intensity line/zone or the low intensity line/zone.
 Here, (a,b), (c,d), (e,f) pairs represent the same line but upper or lower zones. Since we want to make distance or area gap metrics across the signals, we made upper and lower representations. 
 
+
+These are the examples of background images and predictions.
 | Mineral | Zone1 | Zone2 |
 | :---: | :---: | :---: |
 | <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/CCC_K10_M4_L1/mineral.png?raw=true" width="250"/> | <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/overlay/1b_overlay.png?raw=true" width="250"/> | <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/overlay/1d_overlay.png?raw=true" width="250"/> |
+
+
+| Trap | Zone1 | Zone2 |
+| :---: | :---: | :---: |
+| <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/CCC_K10_M4_L1/trap.png?raw=true" width="250"/> | <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/overlay/4b_overlay.png?raw=true" width="250"/> | <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/overlay/4d_overlay.png?raw=true" width="250"/> |
+
 
