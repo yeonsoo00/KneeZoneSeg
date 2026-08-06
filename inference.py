@@ -40,11 +40,15 @@ import torch.nn.functional as F
 from typing import List, Tuple, Dict
 from data import SIGNAL_FILES
 from tqdm import tqdm
+from format_psd import find_psd_files, format_psd_dataset
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run inference with trained knee segmentation model")
-    parser.add_argument('--image_root', type=str, default='/home/yec23006/projects/research/KneeGrowthPlate/ZoneSeg/Input/Testdata/Image/', help='Root directory of input images')
-    parser.add_argument('--checkpoint', type=str, required=True, help='Path to model checkpoint (.pth)')
+    parser.add_argument('--image_root', type=str, default='', help='Root directory of input images')
+    parser.add_argument('--psd_root', type=str, default='', help='Directory containing numbered PSD files; format these automatically before inference')
+    parser.add_argument('--formatted_root', type=str, default='', help='Converted input directory (default: <output_dir>/_formatted_input)')
+    parser.add_argument('--overwrite_formatted', action='store_true', help='Re-render already formatted PNG files')
+    parser.add_argument('--checkpoint', type=str, default='/home/yec23006/projects/research/KneeGrowthPlate/ZoneSeg/SemiSeparatedUnetFusion/ckpt/best_model_ch64_dicepen.pth', help='Path to model checkpoint (.pth)')
     parser.add_argument('--output_dir', type=str, required=True, help='Directory to save predictions')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size for inference')
     parser.add_argument('--workers', type=int, default=2, help='Number of DataLoader workers')
@@ -53,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     # Optional mask root to determine number of output classes
     parser.add_argument('--mask_root', type=str, default='', help='Root directory of ground truth masks; used to infer output channel count')
     # SFO HSV options
-    parser.add_argument('--sfo_hsv', action='store_true', help='Append HSV-derived channels from the SFO RGB image')
+    parser.add_argument('--sfo_hsv', default=True, help='Append HSV-derived channels from the SFO RGB image')
     parser.add_argument('--sfo_hsv_channels', type=int, default=1,
                         help='Number of channels to append from the SFO HSV representation (1=hue only, 2=hue and saturation)')
     # Target image size options (must match training)
@@ -76,7 +80,21 @@ def main() -> None:
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
+    # --image_root can also point directly to a directory containing PSDs.
+    psd_root = args.psd_root
+    if not psd_root:
+        candidate_root = Path(args.image_root)
+        if candidate_root.is_dir() and find_psd_files(candidate_root):
+            psd_root = str(candidate_root)
+    if psd_root:
+        formatted_root = Path(args.formatted_root) if args.formatted_root else Path(args.output_dir) / '_formatted_input'
+        args.image_root = str(format_psd_dataset(
+            psd_root, formatted_root, overwrite=args.overwrite_formatted
+        ))
+
     samples = list_samples(args.image_root)
+    if not samples:
+        raise RuntimeError(f'No inference samples found in {args.image_root}')
     # Parse hsv groups if provided
     hsv_groups = None
     if args.hsv_groups:
@@ -199,7 +217,7 @@ def main() -> None:
         n_channels=in_ch,
         branches=branches,
         gating_info=gating_info,
-        base_ch=32,
+        base_ch=64,
         bilinear=True,
     )
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
