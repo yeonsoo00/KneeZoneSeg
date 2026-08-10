@@ -30,7 +30,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from zone_analysis import STAINS, load_zone_mask, measure_vertical_gap, render_gap_overlay
+from zone_analysis import STAINS, measure_vertical_gap, render_gap_overlay
+from mask_pairing import build_mask_pairs, load_mask_key
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -111,7 +112,7 @@ class AnalysisWindow(QMainWindow):
         box = QGroupBox("1. Prediction")
         layout = QGridLayout(box)
         self.psd_path = QLineEdit()
-        self.psd_path.setPlaceholderText("Directory containing the nine numbered PSD files")
+        self.psd_path.setPlaceholderText("Layered PSD file, or directory containing layered PSD files")
         self.output_path = QLineEdit()
         self.checkpoint_path = QLineEdit(str(DEFAULT_CHECKPOINT))
 
@@ -150,9 +151,13 @@ class AnalysisWindow(QMainWindow):
         self.second_zone.addItems(STAINS)
         self.first_zone.setCurrentText("calcein")
         self.second_zone.setCurrentText("mineral")
+        self.first_zone.currentTextChanged.connect(self._refresh_mask_pairs)
+        self.second_zone.currentTextChanged.connect(self._refresh_mask_pairs)
+        self.pair_combo = QComboBox()
         form.addRow("Sample", self.sample_combo)
         form.addRow("First zone", self.first_zone)
         form.addRow("Second zone", self.second_zone)
+        form.addRow("Mask combination", self.pair_combo)
         layout.addWidget(selection)
 
         backgrounds = QGroupBox("Background signals")
@@ -217,11 +222,12 @@ class AnalysisWindow(QMainWindow):
     def choose_psd_file(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(self, "Choose a PSD file", filter="Photoshop (*.psd *.psb)")
         if selected:
-            self._set_psd_input(Path(selected).parent)
+            self._set_psd_input(Path(selected))
 
-    def _set_psd_input(self, directory: Path) -> None:
-        self.psd_path.setText(str(directory))
-        self.output_path.setText(str(directory / "predictions"))
+    def _set_psd_input(self, source: Path) -> None:
+        self.psd_path.setText(str(source))
+        parent = source.parent if source.is_file() else source
+        self.output_path.setText(str(parent / "predictions"))
 
     def choose_output_directory(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "Choose prediction output directory")
@@ -237,8 +243,8 @@ class AnalysisWindow(QMainWindow):
         psd_root = Path(self.psd_path.text()).expanduser()
         output_root = Path(self.output_path.text()).expanduser()
         checkpoint = Path(self.checkpoint_path.text()).expanduser()
-        if not psd_root.is_dir():
-            self._error("Choose a valid PSD directory.")
+        if not psd_root.exists() or (psd_root.is_file() and psd_root.suffix.lower() not in {".psd", ".psb"}):
+            self._error("Choose a valid layered PSD/PSB file or directory.")
             return
         if not checkpoint.is_file():
             self._error("Choose a valid model checkpoint.")
@@ -274,6 +280,20 @@ class AnalysisWindow(QMainWindow):
     def _sample_changed(self, sample: str) -> None:
         if sample:
             self.last_sample = sample
+        self._refresh_mask_pairs()
+
+    def _refresh_mask_pairs(self) -> None:
+        self.pair_combo.clear()
+        sample = self.sample_combo.currentText()
+        if not sample:
+            return
+        prediction_dir = Path(self.output_path.text()).expanduser() / sample
+        pairs = build_mask_pairs(
+            prediction_dir, self.first_zone.currentText(), self.second_zone.currentText()
+        )
+        for first_key, second_key, category in pairs:
+            label = f"{category.capitalize()}: {first_key} - {second_key}"
+            self.pair_combo.addItem(label, (first_key, second_key))
 
     def analyze(self) -> None:
         sample = self.sample_combo.currentText()
@@ -286,12 +306,18 @@ class AnalysisWindow(QMainWindow):
             self._error("Choose two different predicted zones.")
             return
 
+        pair = self.pair_combo.currentData()
+        if not pair:
+            self._error("No compatible mask combinations are available for these zones.")
+            return
+        first_key, second_key = pair
+
         prediction_dir = Path(self.output_path.text()).expanduser() / sample
         signal_dir = Path(self.output_path.text()).expanduser() / "_formatted_input" / sample
         try:
-            first_mask = load_zone_mask(prediction_dir, first_name)
-            second_mask = load_zone_mask(prediction_dir, second_name)
-            result = measure_vertical_gap(first_mask, second_mask, first_name, second_name)
+            first_mask = load_mask_key(prediction_dir, first_key)
+            second_mask = load_mask_key(prediction_dir, second_key)
+            result = measure_vertical_gap(first_mask, second_mask, first_key, second_key)
             backgrounds = [name for name, check in self.background_checks.items() if check.isChecked()]
             overlay = render_gap_overlay(
                 signal_dir, backgrounds, first_mask, second_mask, result.gap_mask
@@ -308,7 +334,7 @@ class AnalysisWindow(QMainWindow):
             f"({result.thicknesses.size} shared columns; {result.upper_zone} above {result.lower_zone})"
         )
         self.last_overlay = overlay
-        self.last_sample = sample
+        self.last_sample = f"{sample}_{first_key}_{second_key}"
         self.preview.setPixmap(QPixmap.fromImage(ImageQt(overlay)))
         self.preview.adjustSize()
         self.save_button.setEnabled(True)

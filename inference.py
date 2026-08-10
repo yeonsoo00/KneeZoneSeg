@@ -32,7 +32,7 @@ import os
 from pathlib import Path
 
 import torch
-from torchvision.utils import save_image
+from PIL import Image
 
 from data import KneeZoneDataset, list_samples
 from model import UNetFusion, MultiBranchUNet
@@ -40,11 +40,12 @@ import torch.nn.functional as F
 from typing import List, Tuple, Dict
 from data import SIGNAL_FILES
 from tqdm import tqdm
-from format_psd import find_psd_files, format_psd_dataset
+from format_layered_psd import find_psd_files, format_psd_dataset
+from mask_cleanup import largest_connected_component
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run inference with trained knee segmentation model")
-    parser.add_argument('--image_root', type=str, default='', help='Root directory of input images')
+    parser.add_argument('--image_root', type=str, default='/home/yec23006/projects/research/KneeGrowthPlate/ZoneSeg/Input/Testdata/Image/', help='Root directory of input images')
     parser.add_argument('--psd_root', type=str, default='', help='Directory containing numbered PSD files; format these automatically before inference')
     parser.add_argument('--formatted_root', type=str, default='', help='Converted input directory (default: <output_dir>/_formatted_input)')
     parser.add_argument('--overwrite_formatted', action='store_true', help='Re-render already formatted PNG files')
@@ -84,7 +85,7 @@ def main() -> None:
     psd_root = args.psd_root
     if not psd_root:
         candidate_root = Path(args.image_root)
-        if candidate_root.is_dir() and find_psd_files(candidate_root):
+        if candidate_root.exists() and find_psd_files(candidate_root):
             psd_root = str(candidate_root)
     if psd_root:
         formatted_root = Path(args.formatted_root) if args.formatted_root else Path(args.output_dir) / '_formatted_input'
@@ -266,10 +267,11 @@ def main() -> None:
             sample_out_dir = Path(args.output_dir) / sample_name
             sample_out_dir.mkdir(parents=True, exist_ok=True)
             for i, key in enumerate(mask_keys):
-                mask = pred_bin[i:i+1]  # (1,H,W)
+                mask = pred_bin[i].detach().cpu().numpy()
+                mask = largest_connected_component(mask)
                 filename = f"{key}.png"
                 save_path = sample_out_dir / filename
-                save_image(mask, str(save_path))
+                Image.fromarray(mask * 255, mode="L").save(save_path)
 
 
 if __name__ == '__main__':
