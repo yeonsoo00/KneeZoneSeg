@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import ImageDraw
 from PIL.ImageQt import ImageQt
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -26,14 +26,15 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QScrollArea,
+    QRubberBand,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
 from zone_analysis import STAINS, render_gap_overlay
-from mask_pairing import build_mask_pairs, load_mask_key
-from gap_band_analysis import make_positive_band_preview, measure_positive_gap_band
+from mask_pairing import load_mask_key
+from directed_band_analysis import make_positive_band_preview, measure_positive_gap_band
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -79,23 +80,45 @@ class InferenceWorker(QThread):
             self.completed.emit(False, str(exc))
 
 
-class ClickableImageLabel(QLabel):
-    """Image label that reports clicks in unscaled pixmap coordinates."""
+class RubberBandImageLabel(QLabel):
+    """Pixmap label with a drag-to-select rectangular ROI."""
 
-    image_clicked = pyqtSignal(int, int)
+    roi_selected = pyqtSignal(int, int, int, int)
 
     def __init__(self, text: str = "") -> None:
         super().__init__(text)
         self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._origin = QPoint()
+        self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
+
+    def _inside_pixmap(self, point: QPoint) -> bool:
+        pixmap = self.pixmap()
+        return pixmap is not None and 0 <= point.x() < pixmap.width() and 0 <= point.y() < pixmap.height()
 
     def mousePressEvent(self, event) -> None:
-        pixmap = self.pixmap()
-        if pixmap is not None:
-            x = int(event.position().x())
-            y = int(event.position().y())
-            if 0 <= x < pixmap.width() and 0 <= y < pixmap.height():
-                self.image_clicked.emit(x, y)
+        point = event.position().toPoint()
+        if event.button() == Qt.MouseButton.LeftButton and self._inside_pixmap(point):
+            self._origin = point
+            self._rubber_band.setGeometry(QRect(self._origin, self._origin))
+            self._rubber_band.show()
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._rubber_band.isVisible():
+            pixmap = self.pixmap()
+            point = event.position().toPoint()
+            point.setX(max(0, min(pixmap.width() - 1, point.x())))
+            point.setY(max(0, min(pixmap.height() - 1, point.y())))
+            self._rubber_band.setGeometry(QRect(self._origin, point).normalized())
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._rubber_band.isVisible():
+            rectangle = self._rubber_band.geometry().normalized()
+            self._rubber_band.hide()
+            if rectangle.width() > 1 and rectangle.height() > 1:
+                self.roi_selected.emit(rectangle.left(), rectangle.top(), rectangle.right(), rectangle.bottom())
+        super().mouseReleaseEvent(event)
 
 
 class AnalysisWindow(QMainWindow):
@@ -108,7 +131,6 @@ class AnalysisWindow(QMainWindow):
         self.last_sample = "analysis"
         self.background_checks = {}
         self.analysis_context = None
-        self.selection_points = []
         self.current_roi = None
 
         root = QWidget()
@@ -169,19 +191,11 @@ class AnalysisWindow(QMainWindow):
         form = QFormLayout(selection)
         self.sample_combo = QComboBox()
         self.sample_combo.currentTextChanged.connect(self._sample_changed)
-        self.first_zone = QComboBox()
-        self.second_zone = QComboBox()
-        self.first_zone.addItems(STAINS)
-        self.second_zone.addItems(STAINS)
-        self.first_zone.setCurrentText("calcein")
-        self.second_zone.setCurrentText("mineral")
-        self.first_zone.currentTextChanged.connect(self._refresh_mask_pairs)
-        self.second_zone.currentTextChanged.connect(self._refresh_mask_pairs)
-        self.pair_combo = QComboBox()
+        self.first_mask_combo = QComboBox()
+        self.second_mask_combo = QComboBox()
         form.addRow("Sample", self.sample_combo)
-        form.addRow("First zone", self.first_zone)
-        form.addRow("Second zone", self.second_zone)
-        form.addRow("Mask combination", self.pair_combo)
+        form.addRow("First mask (+)", self.first_mask_combo)
+        form.addRow("Second mask (-)", self.second_mask_combo)
         layout.addWidget(selection)
 
         backgrounds = QGroupBox("Background signals")
@@ -213,16 +227,18 @@ class AnalysisWindow(QMainWindow):
         self.max_label = QLabel("—")
         self.range_label = QLabel("—")
         self.vertical_range_label = QLabel("—")
+        self.direction_label = QLabel("—")
         metrics_form.addRow("10% trimmed mean", self.trimmed_mean_label)
         metrics_form.addRow("Standard deviation", self.std_label)
         metrics_form.addRow("Maximum", self.max_label)
         metrics_form.addRow("Horizontal range", self.range_label)
         metrics_form.addRow("Vertical range", self.vertical_range_label)
+        metrics_form.addRow("Subtraction order", self.direction_label)
         layout.addWidget(metrics)
 
         note = QLabel(
             "Cyan and magenta show the selected predicted zones. Red shows the "
-            "positive in-between gap band. Click two corners on the overlay to set "
+            "positive in-between gap band. Drag a rubber band on the overlay to set "
             "both horizontal and vertical ranges; 10% is trimmed from each tail."
         )
         note.setWordWrap(True)
@@ -233,9 +249,9 @@ class AnalysisWindow(QMainWindow):
     def _build_preview_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.addWidget(QLabel("Overlay preview — click two corners to select a range"))
-        self.preview = ClickableImageLabel("Run prediction and analyze two zones to see the overlay.")
-        self.preview.image_clicked.connect(self._preview_clicked)
+        layout.addWidget(QLabel("Overlay preview — drag to select a rectangular ROI"))
+        self.preview = RubberBandImageLabel("Run prediction and analyze two zones to see the overlay.")
+        self.preview.roi_selected.connect(self._roi_selected)
         self.preview.setMinimumSize(600, 500)
         scroll = QScrollArea()
         scroll.setWidget(self.preview)
@@ -316,37 +332,40 @@ class AnalysisWindow(QMainWindow):
     def _sample_changed(self, sample: str) -> None:
         if sample:
             self.last_sample = sample
-        self._refresh_mask_pairs()
+        self._refresh_mask_choices()
 
-    def _refresh_mask_pairs(self) -> None:
-        self.pair_combo.clear()
+    def _refresh_mask_choices(self) -> None:
+        self.first_mask_combo.clear()
+        self.second_mask_combo.clear()
         sample = self.sample_combo.currentText()
         if not sample:
             return
         prediction_dir = Path(self.output_path.text()).expanduser() / sample
-        pairs = build_mask_pairs(
-            prediction_dir, self.first_zone.currentText(), self.second_zone.currentText()
-        )
-        for first_key, second_key, category in pairs:
-            label = f"{category.capitalize()}: {first_key} - {second_key}"
-            self.pair_combo.addItem(label, (first_key, second_key))
+        keys = [
+            path.stem.lower() for path in sorted(prediction_dir.glob("[1-9][a-h].png"))
+        ]
+        self.first_mask_combo.addItems(keys)
+        self.second_mask_combo.addItems(keys)
+        if "1a" in keys:
+            self.first_mask_combo.setCurrentText("1a")
+        if "3a" in keys:
+            self.second_mask_combo.setCurrentText("3a")
+        elif len(keys) > 1:
+            self.second_mask_combo.setCurrentIndex(1)
 
     def analyze(self) -> None:
         sample = self.sample_combo.currentText()
-        first_name = self.first_zone.currentText()
-        second_name = self.second_zone.currentText()
+        first_key = self.first_mask_combo.currentText()
+        second_key = self.second_mask_combo.currentText()
         if not sample:
             self._error("Run prediction and choose a sample first.")
             return
-        if first_name == second_name:
-            self._error("Choose two different predicted zones.")
+        if not first_key or not second_key:
+            self._error("Choose two prediction masks to subtract.")
             return
-
-        pair = self.pair_combo.currentData()
-        if not pair:
-            self._error("No compatible mask combinations are available for these zones.")
+        if first_key == second_key:
+            self._error("Choose two different prediction masks.")
             return
-        first_key, second_key = pair
 
         prediction_dir = Path(self.output_path.text()).expanduser() / sample
         signal_dir = Path(self.output_path.text()).expanduser() / "_formatted_input" / sample
@@ -365,7 +384,6 @@ class AnalysisWindow(QMainWindow):
             "second_mask": second_mask,
             "signal_dir": signal_dir,
         }
-        self.selection_points = []
         self.current_roi = None
         self._update_analysis(None)
 
@@ -409,6 +427,12 @@ class AnalysisWindow(QMainWindow):
             f"({result.thicknesses.size} positive-band columns)"
         )
         self.vertical_range_label.setText(f"y = {selected_y[0]}–{selected_y[1]}")
+        if result.upper_zone == context["first_key"]:
+            self.direction_label.setText(f"{context['first_key']} → {context['second_key']}")
+        else:
+            self.direction_label.setText(
+                f"Auto-flipped: {context['second_key']} → {context['first_key']}"
+            )
         self.last_overlay = overlay
         self.last_sample = f"{context['sample']}_{context['first_key']}_{context['second_key']}"
         self.current_roi = roi
@@ -419,27 +443,18 @@ class AnalysisWindow(QMainWindow):
         self.save_button.setEnabled(True)
         return True
 
-    def _preview_clicked(self, x: int, y: int) -> None:
+    def _roi_selected(self, x1: int, y1: int, x2: int, y2: int) -> None:
         if self.analysis_context is None:
             return
-        if not self.selection_points:
-            self.selection_points = [(x, y)]
-            marker = self.last_overlay.copy()
-            draw = ImageDraw.Draw(marker)
-            draw.ellipse((x - 4, y - 4, x + 4, y + 4), outline=(255, 255, 0), width=2)
-            self.preview.setPixmap(QPixmap.fromImage(ImageQt(marker)))
-            self.status_label.setText(f"First range corner: ({x}, {y}); click the opposite corner")
-            return
-        x1, y1 = self.selection_points[0]
-        roi = (min(x1, x), min(y1, y), max(x1, x), max(y1, y))
-        self.selection_points = []
+        roi = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
         if self._update_analysis(roi):
-            self.status_label.setText(f"Selected range: x={roi[0]}–{roi[2]}, y={roi[1]}–{roi[3]}")
+            self.status_label.setText(
+                f"Rubber-band ROI: x={roi[0]}–{roi[2]}, y={roi[1]}–{roi[3]}"
+            )
 
     def reset_range(self) -> None:
         if self.analysis_context is None:
             return
-        self.selection_points = []
         if self._update_analysis(None):
             self.status_label.setText("Range reset to the full image")
 
