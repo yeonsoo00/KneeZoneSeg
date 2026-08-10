@@ -12,7 +12,10 @@ Launch the application:
 python3 analyze_qt6.py
 ```
 
-1. Choose any one of the numbered PSD files, or choose their directory.
+1. Choose one layered PSD/PSB file, or a directory containing layered PSDs.
+   Each PSD is one sample. Its layers must start with `1_` through `9_`:
+   1=Mineral, 2=AC, 3=Calcein, 4=TRAP, 5=DAPI, 6=AP, 7=EdU, 8=CFO,
+   and 9=SFO. Text after the underscore is ignored.
 2. Confirm the prediction output directory and model checkpoint.
 3. Click **Predict**. Converted PNG inputs are retained in
    `<prediction output>/_formatted_input`.

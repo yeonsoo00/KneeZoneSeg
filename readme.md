@@ -30,7 +30,7 @@ These are the examples of background images and predictions.
 | <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/CCC_K10_M4_L1/trap.png?raw=true" width="250"/> | <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/overlay/4b_overlay.png?raw=true" width="250"/> | <img src="https://github.com/yeonsoo00/KneeZoneSeg/blob/main/src/overlay/4d_overlay.png?raw=true" width="250"/> |
 
 
-**Inference**\
+**Inference**  
 After running inference, you would get predictions (masks) in png for all the lines we defined. If EdU is missing, a placeholder image will be saved. You have to specify your image-root and output-dir to run the code. The image should be aligned (registered) psd with formatted names (e.g., 1_CCC_XXX_XXX, 2_CCC_XXX_XXX).
 
 ```
