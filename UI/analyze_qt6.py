@@ -6,8 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from PIL import ImageDraw
 from PIL.ImageQt import ImageQt
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -30,8 +31,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from zone_analysis import STAINS, measure_vertical_gap, render_gap_overlay
+from zone_analysis import STAINS, render_gap_overlay
 from mask_pairing import build_mask_pairs, load_mask_key
+from gap_band_analysis import make_positive_band_preview, measure_positive_gap_band
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -77,6 +79,25 @@ class InferenceWorker(QThread):
             self.completed.emit(False, str(exc))
 
 
+class ClickableImageLabel(QLabel):
+    """Image label that reports clicks in unscaled pixmap coordinates."""
+
+    image_clicked = pyqtSignal(int, int)
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+
+    def mousePressEvent(self, event) -> None:
+        pixmap = self.pixmap()
+        if pixmap is not None:
+            x = int(event.position().x())
+            y = int(event.position().y())
+            if 0 <= x < pixmap.width() and 0 <= y < pixmap.height():
+                self.image_clicked.emit(x, y)
+        super().mousePressEvent(event)
+
+
 class AnalysisWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -86,6 +107,9 @@ class AnalysisWindow(QMainWindow):
         self.last_overlay = None
         self.last_sample = "analysis"
         self.background_checks = {}
+        self.analysis_context = None
+        self.selection_points = []
+        self.current_roi = None
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -175,7 +199,10 @@ class AnalysisWindow(QMainWindow):
         self.save_button = QPushButton("Save image…")
         self.save_button.setEnabled(False)
         self.save_button.clicked.connect(self.save_image)
+        self.reset_range_button = QPushButton("Reset range")
+        self.reset_range_button.clicked.connect(self.reset_range)
         buttons.addWidget(analyze)
+        buttons.addWidget(self.reset_range_button)
         buttons.addWidget(self.save_button)
         layout.addLayout(buttons)
 
@@ -185,16 +212,18 @@ class AnalysisWindow(QMainWindow):
         self.std_label = QLabel("—")
         self.max_label = QLabel("—")
         self.range_label = QLabel("—")
+        self.vertical_range_label = QLabel("—")
         metrics_form.addRow("10% trimmed mean", self.trimmed_mean_label)
         metrics_form.addRow("Standard deviation", self.std_label)
         metrics_form.addRow("Maximum", self.max_label)
         metrics_form.addRow("Horizontal range", self.range_label)
+        metrics_form.addRow("Vertical range", self.vertical_range_label)
         layout.addWidget(metrics)
 
         note = QLabel(
             "Cyan and magenta show the selected predicted zones. Red shows the "
-            "in-between gap. Thickness is measured vertically in columns occupied "
-            "by both zones; 10% is trimmed from each tail for the mean."
+            "positive in-between gap band. Click two corners on the overlay to set "
+            "both horizontal and vertical ranges; 10% is trimmed from each tail."
         )
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -204,14 +233,21 @@ class AnalysisWindow(QMainWindow):
     def _build_preview_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.addWidget(QLabel("Overlay preview"))
-        self.preview = QLabel("Run prediction and analyze two zones to see the overlay.")
-        self.preview.setAlignment(self.preview.alignment())
+        layout.addWidget(QLabel("Overlay preview — click two corners to select a range"))
+        self.preview = ClickableImageLabel("Run prediction and analyze two zones to see the overlay.")
+        self.preview.image_clicked.connect(self._preview_clicked)
         self.preview.setMinimumSize(600, 500)
         scroll = QScrollArea()
         scroll.setWidget(self.preview)
-        scroll.setWidgetResizable(True)
-        layout.addWidget(scroll, 1)
+        scroll.setWidgetResizable(False)
+        layout.addWidget(scroll, 3)
+        layout.addWidget(QLabel("Subtracted positive band (> 0)"))
+        self.band_preview = QLabel()
+        self.band_preview.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        band_scroll = QScrollArea()
+        band_scroll.setWidget(self.band_preview)
+        band_scroll.setWidgetResizable(False)
+        layout.addWidget(band_scroll, 2)
         return panel
 
     def choose_psd_directory(self) -> None:
@@ -317,27 +353,95 @@ class AnalysisWindow(QMainWindow):
         try:
             first_mask = load_mask_key(prediction_dir, first_key)
             second_mask = load_mask_key(prediction_dir, second_key)
-            result = measure_vertical_gap(first_mask, second_mask, first_key, second_key)
-            backgrounds = [name for name, check in self.background_checks.items() if check.isChecked()]
-            overlay = render_gap_overlay(
-                signal_dir, backgrounds, first_mask, second_mask, result.gap_mask
-            )
         except Exception as exc:
             self._error(str(exc))
             return
 
+        self.analysis_context = {
+            "sample": sample,
+            "first_key": first_key,
+            "second_key": second_key,
+            "first_mask": first_mask,
+            "second_mask": second_mask,
+            "signal_dir": signal_dir,
+        }
+        self.selection_points = []
+        self.current_roi = None
+        self._update_analysis(None)
+
+    def _update_analysis(self, roi) -> bool:
+        if self.analysis_context is None:
+            return False
+        context = self.analysis_context
+        try:
+            result = measure_positive_gap_band(
+                context["first_mask"], context["second_mask"],
+                context["first_key"], context["second_key"], roi=roi,
+            )
+            backgrounds = [
+                name for name, check in self.background_checks.items() if check.isChecked()
+            ]
+            overlay = render_gap_overlay(
+                context["signal_dir"], backgrounds, context["first_mask"],
+                context["second_mask"], result.gap_mask,
+            )
+        except Exception as exc:
+            self._error(str(exc))
+            return False
+
+        height, width = result.gap_mask.shape
+        if roi is None:
+            selected_x = (0, width - 1)
+            selected_y = (0, height - 1)
+        else:
+            x1, y1, x2, y2 = roi
+            selected_x = tuple(sorted((x1, x2)))
+            selected_y = tuple(sorted((y1, y2)))
+            draw = ImageDraw.Draw(overlay)
+            draw.rectangle((selected_x[0], selected_y[0], selected_x[1], selected_y[1]), outline=(255, 255, 0), width=2)
+
+        band = make_positive_band_preview(result.gap_mask)
         self.trimmed_mean_label.setText(f"{result.trimmed_mean:.2f}")
         self.std_label.setText(f"{result.standard_deviation:.2f}")
         self.max_label.setText(f"{result.maximum:.0f}")
         self.range_label.setText(
-            f"x = {result.x_start}–{result.x_end} "
-            f"({result.thicknesses.size} shared columns; {result.upper_zone} above {result.lower_zone})"
+            f"x = {selected_x[0]}–{selected_x[1]} "
+            f"({result.thicknesses.size} positive-band columns)"
         )
+        self.vertical_range_label.setText(f"y = {selected_y[0]}–{selected_y[1]}")
         self.last_overlay = overlay
-        self.last_sample = f"{sample}_{first_key}_{second_key}"
+        self.last_sample = f"{context['sample']}_{context['first_key']}_{context['second_key']}"
+        self.current_roi = roi
         self.preview.setPixmap(QPixmap.fromImage(ImageQt(overlay)))
         self.preview.adjustSize()
+        self.band_preview.setPixmap(QPixmap.fromImage(ImageQt(band)))
+        self.band_preview.adjustSize()
         self.save_button.setEnabled(True)
+        return True
+
+    def _preview_clicked(self, x: int, y: int) -> None:
+        if self.analysis_context is None:
+            return
+        if not self.selection_points:
+            self.selection_points = [(x, y)]
+            marker = self.last_overlay.copy()
+            draw = ImageDraw.Draw(marker)
+            draw.ellipse((x - 4, y - 4, x + 4, y + 4), outline=(255, 255, 0), width=2)
+            self.preview.setPixmap(QPixmap.fromImage(ImageQt(marker)))
+            self.status_label.setText(f"First range corner: ({x}, {y}); click the opposite corner")
+            return
+        x1, y1 = self.selection_points[0]
+        roi = (min(x1, x), min(y1, y), max(x1, x), max(y1, y))
+        self.selection_points = []
+        if self._update_analysis(roi):
+            self.status_label.setText(f"Selected range: x={roi[0]}–{roi[2]}, y={roi[1]}–{roi[3]}")
+
+    def reset_range(self) -> None:
+        if self.analysis_context is None:
+            return
+        self.selection_points = []
+        if self._update_analysis(None):
+            self.status_label.setText("Range reset to the full image")
 
     def save_image(self) -> None:
         if self.last_overlay is None:
