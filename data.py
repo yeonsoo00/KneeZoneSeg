@@ -122,6 +122,15 @@ SIGNAL_FILES: Dict[str, Tuple[str, ...]] = {
 MASK_PATTERN = re.compile(r"^(\d+[a-zA-Z])\.png$")
 
 
+def _torch_from_numpy(array: np.ndarray) -> torch.Tensor:
+    """Convert NumPy arrays with a DLPack fallback for NumPy ABI mismatches."""
+    array = np.ascontiguousarray(array)
+    try:
+        return torch.from_numpy(array)
+    except RuntimeError:
+        return torch.from_dlpack(array)
+
+
 class KneeZoneDataset(Dataset):
     """PyTorch Dataset for knee zone segmentation.
 
@@ -465,7 +474,7 @@ class KneeZoneDataset(Dataset):
                     arr_resized = np.array(img_resized, dtype=np.float32) / 255.0
                     resized_channels.append(arr_resized)
                 stacked = np.stack(resized_channels, axis=0)
-        return torch.from_numpy(stacked)
+        return _torch_from_numpy(stacked)
 
     def _load_masks(self, mask_paths: List[Path] | Path) -> torch.Tensor:
         """Load zone masks for a sample as a tensor of shape (K,H,W).
@@ -549,7 +558,7 @@ class KneeZoneDataset(Dataset):
                     arr_resized = np.array(img_resized, dtype=np.float32) / 255.0
                     resized_masks.append(arr_resized)
                 mask_arr = np.stack(resized_masks, axis=0)
-        mask_tensor = torch.from_numpy(mask_arr)
+        mask_tensor = _torch_from_numpy(mask_arr)
         return mask_tensor
 
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
