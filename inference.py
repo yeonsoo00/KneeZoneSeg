@@ -5,17 +5,22 @@ Given a trained model checkpoint and a directory of input samples, this
 script runs the model on each sample and saves the predicted masks as
 binary PNG images.  It is intended for evaluation or deployment.
 
-Example usage::
+Example commands (run from ``SemiSeparatedUnetFusion``)::
 
-    python -m knee_zone_detection.inference \
-        --image-root /path/to/Input/Image \
-        --checkpoint ./checkpoints/best_model.pth \
-        --output-dir ./predictions
+    # Save prediction masks only.
+    python inference.py --output_dir Output
+
+    # Save masks, then original-size signals with green mask outlines.
+    python inference.py --output_dir Output --make_overlaps
+
+    # Use a thicker outline and a custom overlap directory.
+    python inference.py --checkpoint /home/yec23006/projects/research/KneeGrowthPlate/ZoneSeg/SemiSeparatedUnetFusion/ckpt/groupnorm_deepsuper_surface/best_model_ch48_boundary.pth --output_dir Output_ch48_deepsuper_boundary --make_overlaps \
+        --overlap_boundary_thickness 8 --overlap_output_dir Output_ch48_deepsuper_boundary/Overlap --base_ch 48 --use_pyramid_agg --use_cross_attention --norm group --group_norm_groups 8 --deep_supervision
 
 This script loads the same dataset class used for training but does not
 require ground truth masks.  It normalises input images to [0,1] and
 applies a sigmoid to the network outputs.  Each output channel is
-thresholded at 0.5 to produce a binary mask.  Predicted masks are saved
+thresholded, reduced to the largest component, and hole-filled to produce the final binary mask. Predicted masks are saved
 with filenames corresponding to their class index (e.g., ``0.png``,
 ``1.png``, etc.).
 
@@ -29,8 +34,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
+import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 from PIL import Image
 
@@ -40,8 +48,8 @@ import torch.nn.functional as F
 from typing import List, Tuple, Dict
 from data import SIGNAL_FILES
 from tqdm import tqdm
-from format_layered_psd import find_psd_files, format_psd_dataset
-from mask_cleanup import largest_connected_component
+from common_crop_psd import find_psd_files, format_psd_dataset
+from mask_cleanup import finalize_binary_mask
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run inference with trained knee segmentation model")
@@ -52,7 +60,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--checkpoint', type=str, default='/home/yec23006/projects/research/KneeGrowthPlate/ZoneSeg/SemiSeparatedUnetFusion/ckpt/best_model_ch64_dicepen.pth', help='Path to model checkpoint (.pth)')
     parser.add_argument('--output_dir', type=str, required=True, help='Directory to save predictions')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size for inference')
+    parser.add_argument('--prediction_threshold', type=float, default=0.5, help='Threshold applied before largest-component and hole-filling postprocessing')
     parser.add_argument('--workers', type=int, default=2, help='Number of DataLoader workers')
+    parser.add_argument('--base_ch', type=int, default=48, help='Base channels used during training')
+    parser.add_argument('--use_pyramid_agg', action='store_true', help='Checkpoint uses pyramid aggregation')
+    parser.add_argument('--use_cross_attention', action='store_true', help='Checkpoint uses cross attention')
+    parser.add_argument('--norm', choices=['batch', 'group'], default='batch', help='Normalization used during training')
+    parser.add_argument('--group_norm_groups', type=int, default=8, help='GroupNorm groups used during training')
+    parser.add_argument('--deep_supervision', action='store_true', help='Checkpoint contains auxiliary supervision heads')
     parser.add_argument('--use_hsv', action='store_true', help='Append a hue channel computed from grouped signals as in training')
     parser.add_argument('--hsv_groups', type=str, default='', help='Comma-separated lists of signal indices for R,G,B (e.g., "0 1 2,3 4 5,6 7 8")')
     # Optional mask root to determine number of output classes
@@ -74,12 +89,28 @@ def parse_args() -> argparse.Namespace:
     # keys defined in the training dataset are used.
     parser.add_argument('--selected_keys', type=str, default='',
                         help='Subset of mask keys to predict (comma/space separated)')
+    parser.add_argument('--make_overlaps', action='store_true',
+                        help='After inference, run make_overlap.py to draw green mask boundaries over the original signals')
+    parser.add_argument('--overlap_output_dir', type=str, default='',
+                        help='Overlap output root (default: <output_dir>/Overlap)')
+    parser.add_argument('--overlap_boundary_thickness', type=int, default=4,
+                        help='Green boundary thickness in original-image pixels (default: 4)')
     return parser.parse_args()
+
+
+def _tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
+    tensor = tensor.detach().cpu()
+    try:
+        return tensor.numpy()
+    except RuntimeError:
+        return np.from_dlpack(tensor)
 
 
 def main() -> None:
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
+    if not 0.0 <= args.prediction_threshold <= 1.0:
+        raise ValueError("prediction_threshold must be between 0 and 1")
 
     # --image_root can also point directly to a directory containing PSDs.
     psd_root = args.psd_root
@@ -213,13 +244,18 @@ def main() -> None:
     }
     # Instantiate the multi-branch model.  We do not specify use_fusion here
     # because the fusion behaviour is encapsulated in the branch decoders and
-    # heads.  ``base_ch`` is fixed at 32 for inference as in training.
+    # heads. Architecture flags must match the training checkpoint.
     model = MultiBranchUNet(
         n_channels=in_ch,
         branches=branches,
         gating_info=gating_info,
-        base_ch=64,
+        base_ch=args.base_ch,
         bilinear=True,
+        use_pyramid_agg=args.use_pyramid_agg,
+        use_cross_attention=args.use_cross_attention,
+        norm=args.norm,
+        group_norm_groups=args.group_norm_groups,
+        deep_supervision=args.deep_supervision,
     )
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     state_dict = torch.load(args.checkpoint, map_location=device)
@@ -262,16 +298,41 @@ def main() -> None:
                 for j, idx in enumerate(idxs):
                     full_logits[:, idx] = logits[:, j]
             probs = torch.sigmoid(full_logits)[0]  # (C,H,W) for single sample
-            pred_bin = (probs > 0.5).float()
+            pred_bin = (probs >= args.prediction_threshold).float()
             # Save masks using mask key names
             sample_out_dir = Path(args.output_dir) / sample_name
             sample_out_dir.mkdir(parents=True, exist_ok=True)
             for i, key in enumerate(mask_keys):
-                mask = pred_bin[i].detach().cpu().numpy()
-                mask = largest_connected_component(mask)
+                mask = finalize_binary_mask(_tensor_to_numpy(pred_bin[i]))
                 filename = f"{key}.png"
                 save_path = sample_out_dir / filename
                 Image.fromarray(mask * 255, mode="L").save(save_path)
+
+
+    if args.make_overlaps:
+        overlap_script = Path(__file__).resolve().with_name('make_overlap.py')
+        overlap_output_dir = (
+            Path(args.overlap_output_dir)
+            if args.overlap_output_dir
+            else Path(args.output_dir) / 'Overlap'
+        )
+        command = [
+            sys.executable,
+            str(overlap_script),
+            '--pred-root', str(Path(args.output_dir).resolve()),
+            '--image-root', str(Path(args.image_root).resolve()),
+            '--output-root', str(overlap_output_dir.resolve()),
+            '--boundary-thickness', str(args.overlap_boundary_thickness),
+            '--overwrite',
+        ]
+        print(f'Creating overlap images in {overlap_output_dir} ...')
+        result = subprocess.run(command, check=False)
+        if result.returncode != 0:
+            print(
+                f'Warning: make_overlap.py finished with exit code '
+                f'{result.returncode}; see warnings above.',
+                file=sys.stderr,
+            )
 
 
 if __name__ == '__main__':

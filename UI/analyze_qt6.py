@@ -32,9 +32,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from zone_analysis import STAINS, render_gap_overlay
+from zone_analysis import STAINS
 from mask_pairing import load_mask_key
-from directed_band_analysis import make_positive_band_preview, measure_positive_gap_band
+from directed_band_analysis import measure_positive_gap_band
+from analysis_visualization import render_background_and_masks
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -225,20 +226,22 @@ class AnalysisWindow(QMainWindow):
         self.trimmed_mean_label = QLabel("—")
         self.std_label = QLabel("—")
         self.max_label = QLabel("—")
+        self.pixel_area_label = QLabel("—")
         self.range_label = QLabel("—")
         self.vertical_range_label = QLabel("—")
         self.direction_label = QLabel("—")
         metrics_form.addRow("10% trimmed mean", self.trimmed_mean_label)
         metrics_form.addRow("Standard deviation", self.std_label)
         metrics_form.addRow("Maximum", self.max_label)
+        metrics_form.addRow("Pixel area", self.pixel_area_label)
         metrics_form.addRow("Horizontal range", self.range_label)
         metrics_form.addRow("Vertical range", self.vertical_range_label)
         metrics_form.addRow("Subtraction order", self.direction_label)
         layout.addWidget(metrics)
 
         note = QLabel(
-            "Cyan and magenta show the selected predicted zones. Red shows the "
-            "positive in-between gap band. Drag a rubber band on the overlay to set "
+            "The selected background remains visible; both masks and the positive "
+            "in-between gap band are brightened toward white. Drag a rubber band on the overlay to set "
             "both horizontal and vertical ranges; 10% is trimmed from each tail."
         )
         note.setWordWrap(True)
@@ -257,7 +260,7 @@ class AnalysisWindow(QMainWindow):
         scroll.setWidget(self.preview)
         scroll.setWidgetResizable(False)
         layout.addWidget(scroll, 3)
-        layout.addWidget(QLabel("Subtracted positive band (> 0)"))
+        layout.addWidget(QLabel("Background × positive band (> 0)"))
         self.band_preview = QLabel()
         self.band_preview.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         band_scroll = QScrollArea()
@@ -399,7 +402,7 @@ class AnalysisWindow(QMainWindow):
             backgrounds = [
                 name for name, check in self.background_checks.items() if check.isChecked()
             ]
-            overlay = render_gap_overlay(
+            overlay, band = render_background_and_masks(
                 context["signal_dir"], backgrounds, context["first_mask"],
                 context["second_mask"], result.gap_mask,
             )
@@ -418,10 +421,10 @@ class AnalysisWindow(QMainWindow):
             draw = ImageDraw.Draw(overlay)
             draw.rectangle((selected_x[0], selected_y[0], selected_x[1], selected_y[1]), outline=(255, 255, 0), width=2)
 
-        band = make_positive_band_preview(result.gap_mask)
         self.trimmed_mean_label.setText(f"{result.trimmed_mean:.2f}")
         self.std_label.setText(f"{result.standard_deviation:.2f}")
         self.max_label.setText(f"{result.maximum:.0f}")
+        self.pixel_area_label.setText(f"{int(result.gap_mask.sum()):,} px²")
         self.range_label.setText(
             f"x = {selected_x[0]}–{selected_x[1]} "
             f"({result.thicknesses.size} positive-band columns)"
