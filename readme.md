@@ -41,3 +41,30 @@ OR
 ```
 python inference.py --psd_root "where/your/images/are" --output_dir "where/you/want/to/save/results"
 ```
+
+## Final model and GUI
+
+The copied inference code now defaults to the final
+`best_model_ch48_deepsuper.pth` architecture: base width 48, GroupNorm with 8
+groups, pyramid aggregation, cross attention, deep supervision, and one SFO hue
+channel. Put the checkpoint at:
+
+```text
+KneeZoneSeg/ckpt/best_model_ch48_deepsuper.pth
+```
+
+Inside the full ZoneSeg workspace, inference and the GUI also discover the
+existing checkpoint under `SemiSeparatedUnetFusion/ckpt/` automatically.
+
+Launch the five-zone interface with:
+
+```bash
+cd KneeZoneSeg/UI
+python analyze_qt6.py
+```
+
+The GUI runs prediction and analyzes Germinal, Columnar, Pre-hypertrophic,
+Hypertrophic, and total GP zones. It removes 5% from each horizontal edge of
+each boundary pair, reports zone geometry and signal intensity, exports CSV,
+and saves individual and combined contour visualizations. See
+`UI/GUI_README.md` for the exact zone definitions and export contents.

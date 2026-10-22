@@ -1,4 +1,4 @@
-# Zone analysis interface (macOS)
+# Five-zone analysis interface
 
 Install the GUI dependencies in the same Python environment used for inference:
 
@@ -6,7 +6,12 @@ Install the GUI dependencies in the same Python environment used for inference:
 python3 -m pip install -r requirements-macos-gui.txt
 ```
 
-Launch the application:
+Place the final checkpoint at `KneeZoneSeg/ckpt/best_model_ch48_deepsuper.pth`,
+or select the existing checkpoint in the GUI. When this repository is kept
+inside the ZoneSeg workspace, the GUI automatically finds
+`SemiSeparatedUnetFusion/ckpt/best_model_ch48_deepsuper.pth`.
+
+Launch the application from this directory:
 
 ```bash
 python3 analyze_qt6.py
@@ -19,20 +24,46 @@ python3 analyze_qt6.py
 2. Confirm the prediction output directory and model checkpoint.
 3. Click **Predict**. Converted PNG inputs are retained in
    `<prediction output>/_formatted_input`.
-4. Choose a sample and two predicted stain zones, select background signals,
-   and click **Analyze gap**.
-5. Click **Save image** to export the displayed overlay.
+4. Choose a sample and analysis background (SFO by default), then click
+   **Analyze five zones**.
+5. Use **Export measurements to CSV** and **Save zone visualizations** to save
+   the table, binary zone masks, individual measurement images, and the total
+   colored contour visualization.
 
-## Measurement definition
+The active GUI is implemented in `zone_gui.py`; `analyze_qt6.py` remains the
+compatible launcher name.
 
-All predicted subzones with the selected stain's leading digit are unioned. For
-example, selecting Calcein unions `3a.png` through `3d.png`. The zone with the
-smaller median vertical coordinate is treated as the upper zone. In every image
-column occupied by both selected zones, thickness is the number of pixels between
-the bottommost upper-zone pixel and topmost lower-zone pixel. This shared-column
-intersection constrains the measurement to the shorter horizontal support.
+## Zone definitions
 
-The reported mean removes the lowest 10% and highest 10% of column thicknesses.
-Standard deviation and maximum are calculated from all shared-column thicknesses.
-Measurements are reported in pixels because the source PSDs do not supply a
-physical pixel-size calibration to the application.
+| Zone | Predicted boundaries |
+|---|---|
+| Germinal | `9a`–`6b` |
+| Columnar | `6a`–`6d` |
+| Pre-hypertrophic | `6c`–`1d` |
+| Hypertrophic | `1c`–`9d` |
+| GP | `9a`–`9d` |
+
+Each zone is filled column-by-column between the interpolated centerlines of
+its two boundary masks. The analysis uses their common horizontal support and
+automatically removes 5% from the left edge and 5% from the right edge. There
+is no manual range/reset control and no pairwise gap analysis.
+
+## Measurements and exports
+
+The table and CSV contain zone area, analyzed width, mean/median/standard
+deviation/minimum/maximum thickness, and mean RGB/grayscale background signal.
+Pixel values and physical units are both exported. The default calibration is
+3.45 µm/pixel and can be changed in the GUI before analysis.
+
+**Save zone visualizations** writes:
+
+- the five binary zone masks;
+- one measurement visualization per zone, with red contour, blue analyzed
+  edges, and sampled green thickness lines;
+- `All_zones_contour_overlay.png`, containing all five colored zones and their
+  contour outlines;
+- `zone_measurements.csv`.
+
+The same presentation workflow is available in `test.ipynb`. Its final cell is
+named `# With contour outline — save the total five-zone visualization` and
+saves the combined contour image.

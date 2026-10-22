@@ -1,4 +1,9 @@
-"""PyQt6 desktop interface for PSD inference and inter-zone gap analysis."""
+"""Compatibility launcher for the five-zone PyQt6 analysis interface.
+
+The active implementation is in :mod:`zone_gui`. The earlier pairwise-gap
+classes remain below only for source compatibility; launching this file uses
+the five-zone window without gap analysis, reset-range controls, or manual ROI.
+"""
 
 from __future__ import annotations
 
@@ -39,7 +44,20 @@ from analysis_visualization import render_background_and_masks
 
 
 APP_DIR = Path(__file__).resolve().parent
-DEFAULT_CHECKPOINT = APP_DIR / "ckpt" / "best_model_ch64_dicepen.pth"
+DEFAULT_CHECKPOINT = next(
+    (
+        path
+        for path in (
+            APP_DIR.parent / "ckpt" / "best_model_ch48_deepsuper.pth",
+            APP_DIR.parent.parent
+            / "SemiSeparatedUnetFusion"
+            / "ckpt"
+            / "best_model_ch48_deepsuper.pth",
+        )
+        if path.is_file()
+    ),
+    APP_DIR.parent / "ckpt" / "best_model_ch48_deepsuper.pth",
+)
 
 
 class InferenceWorker(QThread):
@@ -479,6 +497,14 @@ def main() -> None:
     window = AnalysisWindow()
     window.show()
     sys.exit(app.exec())
+
+
+# Keep the established launcher name while presenting the new five-zone GUI.
+from zone_gui import AnalysisWindow as FiveZoneAnalysisWindow
+from zone_gui import main as five_zone_main
+
+AnalysisWindow = FiveZoneAnalysisWindow
+main = five_zone_main
 
 
 if __name__ == "__main__":

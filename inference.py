@@ -5,7 +5,7 @@ Given a trained model checkpoint and a directory of input samples, this
 script runs the model on each sample and saves the predicted masks as
 binary PNG images.  It is intended for evaluation or deployment.
 
-Example commands (run from ``SemiSeparatedUnetFusion``)::
+Example commands (run from ``KneeZoneSeg``)::
 
     # Save prediction masks only.
     python inference.py --output_dir Output
@@ -13,9 +13,8 @@ Example commands (run from ``SemiSeparatedUnetFusion``)::
     # Save masks, then original-size signals with green mask outlines.
     python inference.py --output_dir Output --make_overlaps
 
-    # Use a thicker outline and a custom overlap directory.
-    python inference.py --checkpoint /home/yec23006/projects/research/KneeGrowthPlate/ZoneSeg/SemiSeparatedUnetFusion/ckpt/groupnorm_deepsuper_surface/best_model_ch48_boundary.pth --output_dir Output_ch48_deepsuper_boundary --make_overlaps \
-        --overlap_boundary_thickness 8 --overlap_output_dir Output_ch48_deepsuper_boundary/Overlap --base_ch 48 --use_pyramid_agg --use_cross_attention --norm group --group_norm_groups 8 --deep_supervision
+    # The defaults match best_model_ch48_deepsuper.pth. Use a custom input root:
+    python inference.py --image_root /path/to/Image --output_dir Output
 
 This script loads the same dataset class used for training but does not
 require ground truth masks.  It normalises input images to [0,1] and
@@ -51,29 +50,40 @@ from tqdm import tqdm
 from common_crop_psd import find_psd_files, format_psd_dataset
 from mask_cleanup import finalize_binary_mask
 
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+_CHECKPOINT_CANDIDATES = (
+    PACKAGE_DIR / 'ckpt' / 'best_model_ch48_deepsuper.pth',
+    PACKAGE_DIR.parent / 'SemiSeparatedUnetFusion' / 'ckpt' / 'best_model_ch48_deepsuper.pth',
+)
+DEFAULT_CHECKPOINT = next(
+    (path for path in _CHECKPOINT_CANDIDATES if path.is_file()),
+    _CHECKPOINT_CANDIDATES[0],
+)
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run inference with trained knee segmentation model")
     parser.add_argument('--image_root', type=str, default='/home/yec23006/projects/research/KneeGrowthPlate/ZoneSeg/Input/Testdata/Image/', help='Root directory of input images')
     parser.add_argument('--psd_root', type=str, default='', help='Directory containing numbered PSD files; format these automatically before inference')
     parser.add_argument('--formatted_root', type=str, default='', help='Converted input directory (default: <output_dir>/_formatted_input)')
     parser.add_argument('--overwrite_formatted', action='store_true', help='Re-render already formatted PNG files')
-    parser.add_argument('--checkpoint', type=str, default='/home/yec23006/projects/research/KneeGrowthPlate/ZoneSeg/SemiSeparatedUnetFusion/ckpt/best_model_ch64_dicepen.pth', help='Path to model checkpoint (.pth)')
+    parser.add_argument('--checkpoint', type=str, default=str(DEFAULT_CHECKPOINT), help='Path to best_model_ch48_deepsuper.pth')
     parser.add_argument('--output_dir', type=str, required=True, help='Directory to save predictions')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size for inference')
     parser.add_argument('--prediction_threshold', type=float, default=0.5, help='Threshold applied before largest-component and hole-filling postprocessing')
     parser.add_argument('--workers', type=int, default=2, help='Number of DataLoader workers')
     parser.add_argument('--base_ch', type=int, default=48, help='Base channels used during training')
-    parser.add_argument('--use_pyramid_agg', action='store_true', help='Checkpoint uses pyramid aggregation')
-    parser.add_argument('--use_cross_attention', action='store_true', help='Checkpoint uses cross attention')
-    parser.add_argument('--norm', choices=['batch', 'group'], default='batch', help='Normalization used during training')
+    parser.add_argument('--use_pyramid_agg', action=argparse.BooleanOptionalAction, default=True, help='Use pyramid aggregation (enabled for the final checkpoint)')
+    parser.add_argument('--use_cross_attention', action=argparse.BooleanOptionalAction, default=True, help='Use cross attention (enabled for the final checkpoint)')
+    parser.add_argument('--norm', choices=['batch', 'group'], default='group', help='Normalization used during training')
     parser.add_argument('--group_norm_groups', type=int, default=8, help='GroupNorm groups used during training')
-    parser.add_argument('--deep_supervision', action='store_true', help='Checkpoint contains auxiliary supervision heads')
+    parser.add_argument('--deep_supervision', action=argparse.BooleanOptionalAction, default=True, help='Load auxiliary supervision heads (enabled for the final checkpoint)')
     parser.add_argument('--use_hsv', action='store_true', help='Append a hue channel computed from grouped signals as in training')
     parser.add_argument('--hsv_groups', type=str, default='', help='Comma-separated lists of signal indices for R,G,B (e.g., "0 1 2,3 4 5,6 7 8")')
     # Optional mask root to determine number of output classes
     parser.add_argument('--mask_root', type=str, default='', help='Root directory of ground truth masks; used to infer output channel count')
     # SFO HSV options
-    parser.add_argument('--sfo_hsv', default=True, help='Append HSV-derived channels from the SFO RGB image')
+    parser.add_argument('--sfo_hsv', action=argparse.BooleanOptionalAction, default=True, help='Append HSV-derived channels from the SFO RGB image')
     parser.add_argument('--sfo_hsv_channels', type=int, default=1,
                         help='Number of channels to append from the SFO HSV representation (1=hue only, 2=hue and saturation)')
     # Target image size options (must match training)
@@ -258,7 +268,7 @@ def main() -> None:
         deep_supervision=args.deep_supervision,
     )
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    state_dict = torch.load(args.checkpoint, map_location=device)
+    state_dict = torch.load(args.checkpoint, map_location=device, weights_only=True)
     model.load_state_dict(state_dict)
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
