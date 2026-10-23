@@ -1,17 +1,25 @@
 # Five-zone analysis interface
 
-Install the GUI dependencies in the same Python environment used for inference:
+Python 3.11 is recommended. Install the complete inference, GUI, and notebook
+environment from the `KneeZoneSeg` directory:
 
 ```bash
-python3 -m pip install -r requirements-macos-gui.txt
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install -r environment.txt
 ```
+
+On Windows, activate the environment with `.venv\Scripts\activate` instead.
+For an NVIDIA-specific PyTorch build, install PyTorch using the command from
+<https://pytorch.org/get-started/locally/> before installing `environment.txt`.
 
 Place the final checkpoint at `KneeZoneSeg/ckpt/best_model_ch48_deepsuper.pth`,
 or select the existing checkpoint in the GUI. When this repository is kept
 inside the ZoneSeg workspace, the GUI automatically finds
 `SemiSeparatedUnetFusion/ckpt/best_model_ch48_deepsuper.pth`.
 
-Launch the application from this directory:
+Launch the application from the `KneeZoneSeg/UI` directory:
 
 ```bash
 python3 analyze_qt6.py

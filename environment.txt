@@ -1,0 +1,35 @@
+# KneeZoneSeg local inference, five-zone UI, and notebook environment.
+# Python 3.11 is recommended.
+#
+# Install from the KneeZoneSeg directory with:
+#   python -m pip install --upgrade pip
+#   python -m pip install -r environment.txt
+#
+# PyTorch's standard wheel supports CPU on all platforms and MPS on Apple
+# silicon. For an NVIDIA-specific CUDA wheel, install PyTorch using the command
+# from https://pytorch.org/get-started/locally/ before installing this file;
+# pip will keep the already-satisfied compatible installation.
+
+# Model inference
+torch>=2.5,<3
+numpy>=2.0,<2.3
+Pillow>=10,<13
+scipy>=1.14,<2
+tqdm>=4.66,<5
+
+# Mask cleanup, contours, watershed, and visualization generation. The headless
+# build is intentional: PyQt6 provides the desktop GUI, so OpenCV does not need
+# its own Qt libraries.
+opencv-python-headless>=4.12,<5
+
+# Layered PSD/PSB input
+psd-tools>=1.10.7,<2
+
+# Desktop UI
+PyQt6>=6.6,<7
+
+# test.ipynb presentation and CSV/plot cells
+matplotlib>=3.8,<4
+pandas>=2.1,<4
+jupyterlab>=4,<5
+ipykernel>=6,<8
