@@ -6,9 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PIL.ImageQt import ImageQt
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -51,12 +50,17 @@ from zone_visualization import (
 
 APP_DIR = Path(__file__).resolve().parent
 PACKAGE_DIR = APP_DIR.parent
+DEFAULT_OUTPUT_DIR = PACKAGE_DIR / "Prediction"
+LAYERED_SUFFIXES = frozenset({".psd", ".psb", ".pxd"})
 
 
 def default_checkpoint() -> Path:
     candidates = (
         PACKAGE_DIR / "ckpt" / "best_model_ch48_deepsuper.pth",
-        PACKAGE_DIR.parent / "SemiSeparatedUnetFusion" / "ckpt" / "best_model_ch48_deepsuper.pth",
+        PACKAGE_DIR.parent
+        / "SemiSeparatedUnetFusion"
+        / "ckpt"
+        / "best_model_ch48_deepsuper.pth",
     )
     return next((path for path in candidates if path.is_file()), candidates[0])
 
@@ -64,13 +68,21 @@ def default_checkpoint() -> Path:
 DEFAULT_CHECKPOINT = default_checkpoint()
 
 
+def _path_ends_with(path: Path, suffix: Path) -> bool:
+    """Return whether path ends with every component in suffix."""
+    return (
+        len(path.parts) >= len(suffix.parts)
+        and path.parts[-len(suffix.parts) :] == suffix.parts
+    )
+
+
 class InferenceWorker(QThread):
     output = pyqtSignal(str)
     completed = pyqtSignal(bool, str)
 
-    def __init__(self, psd_root: Path, output_root: Path, checkpoint: Path) -> None:
+    def __init__(self, input_root: Path, output_root: Path, checkpoint: Path) -> None:
         super().__init__()
-        self.psd_root = psd_root
+        self.input_root = input_root
         self.output_root = output_root
         self.checkpoint = checkpoint
 
@@ -78,17 +90,25 @@ class InferenceWorker(QThread):
         command = [
             sys.executable,
             str(PACKAGE_DIR / "inference.py"),
-            "--psd_root", str(self.psd_root),
-            "--output_dir", str(self.output_root),
-            "--checkpoint", str(self.checkpoint),
-            "--base_ch", "48",
+            "--input_root",
+            str(self.input_root),
+            "--output_dir",
+            str(self.output_root),
+            "--checkpoint",
+            str(self.checkpoint),
+            "--base_ch",
+            "48",
             "--use_pyramid_agg",
             "--use_cross_attention",
-            "--norm", "group",
-            "--group_norm_groups", "8",
+            "--norm",
+            "group",
+            "--group_norm_groups",
+            "8",
             "--deep_supervision",
-            "--sfo_hsv_channels", "1",
-            "--img_size", "512",
+            "--sfo_hsv_channels",
+            "1",
+            "--img_size",
+            "512",
         ]
         try:
             process = subprocess.Popen(
@@ -104,7 +124,9 @@ class InferenceWorker(QThread):
                 self.output.emit(line.rstrip())
             return_code = process.wait()
             if return_code:
-                self.completed.emit(False, f"Inference exited with status {return_code}")
+                self.completed.emit(
+                    False, f"Inference exited with status {return_code}"
+                )
             else:
                 self.completed.emit(True, "Prediction completed")
         except Exception as exc:
@@ -122,6 +144,7 @@ class AnalysisWindow(QMainWindow):
         self.results = None
         self.signal_path = None
         self.visualizations = {}
+        self._preview_pixmap = None
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -133,7 +156,9 @@ class AnalysisWindow(QMainWindow):
         splitter.setSizes([790, 690])
         outer.addWidget(splitter, 1)
 
-    def _path_row(self, line_edit: QLineEdit, callback, text: str = "Browse…") -> QWidget:
+    def _path_row(
+        self, line_edit: QLineEdit, callback, text: str = "Browse…"
+    ) -> QWidget:
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -146,30 +171,35 @@ class AnalysisWindow(QMainWindow):
     def _build_prediction_box(self) -> QGroupBox:
         box = QGroupBox("1. Final-model prediction")
         layout = QGridLayout(box)
-        self.psd_path = QLineEdit()
-        self.psd_path.setPlaceholderText("Layered PSD/PSB file, or a directory of layered PSD/PSB files")
-        self.output_path = QLineEdit()
+        self.input_path = QLineEdit()
+        self.input_path.setPlaceholderText(
+            "PSD/PSB/PXD file, or recursive directory of layered files and JPG/PNG sample folders"
+        )
+        self.output_path = QLineEdit(str(DEFAULT_OUTPUT_DIR))
         self.output_path.setPlaceholderText("Prediction output directory")
         self.output_path.editingFinished.connect(self._populate_samples)
         self.checkpoint_path = QLineEdit(str(DEFAULT_CHECKPOINT))
 
-        layout.addWidget(QLabel("PSD input"), 0, 0)
-        layout.addWidget(self._path_row(self.psd_path, self.choose_psd_directory), 0, 1)
-        file_button = QPushButton("Choose PSD…")
-        file_button.clicked.connect(self.choose_psd_file)
+        layout.addWidget(QLabel("Input"), 0, 0)
+        layout.addWidget(
+            self._path_row(self.input_path, self.choose_input_directory), 0, 1
+        )
+        file_button = QPushButton("Choose PSD/PXD…")
+        file_button.clicked.connect(self.choose_input_file)
         layout.addWidget(file_button, 0, 2)
         layout.addWidget(QLabel("Prediction output"), 1, 0)
-        layout.addWidget(self._path_row(self.output_path, self.choose_output_directory), 1, 1, 1, 2)
+        layout.addWidget(
+            self._path_row(self.output_path, self.choose_output_directory), 1, 1, 1, 2
+        )
         layout.addWidget(QLabel("Final checkpoint"), 2, 0)
-        layout.addWidget(self._path_row(self.checkpoint_path, self.choose_checkpoint), 2, 1, 1, 2)
+        layout.addWidget(
+            self._path_row(self.checkpoint_path, self.choose_checkpoint), 2, 1, 1, 2
+        )
 
         self.predict_button = QPushButton("Predict with best_model_ch48_deepsuper.pth")
         self.predict_button.clicked.connect(self.run_prediction)
-        load_button = QPushButton("Load existing predictions")
-        load_button.clicked.connect(self._populate_samples)
         self.status_label = QLabel("Ready")
-        layout.addWidget(self.predict_button, 3, 0)
-        layout.addWidget(load_button, 3, 1)
+        layout.addWidget(self.predict_button, 3, 0, 1, 2)
         layout.addWidget(self.status_label, 3, 2)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -200,7 +230,8 @@ class AnalysisWindow(QMainWindow):
         layout.addWidget(settings)
 
         definitions = ", ".join(
-            f"{name}: {first}–{second}" for name, (first, second) in ZONE_DEFINITIONS.items()
+            f"{name}: {first}–{second}"
+            for name, (first, second) in ZONE_DEFINITIONS.items()
         )
         note = QLabel(
             f"{definitions}. The common support of each boundary pair is trimmed by "
@@ -226,9 +257,21 @@ class AnalysisWindow(QMainWindow):
 
         self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ["Zone", "Boundaries", "Area px²", "Width px", "Mean px", "Median px", "SD px", "Min–max px", "Mean signal"]
+            [
+                "Zone",
+                "Boundaries",
+                "Area px²",
+                "Width px",
+                "Mean px",
+                "Median px",
+                "SD px",
+                "Min–max px",
+                "Mean signal",
+            ]
         )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         layout.addWidget(self.table, 1)
@@ -243,33 +286,42 @@ class AnalysisWindow(QMainWindow):
         self.visualization_combo.currentTextChanged.connect(self._show_visualization)
         row.addWidget(self.visualization_combo, 1)
         layout.addLayout(row)
-        self.preview = QLabel("Analyze a sample to see the total five-zone contour visualization.")
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.preview = QLabel(
+            "Analyze a sample to see the total five-zone contour visualization."
+        )
+        self.preview.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
         scroll = QScrollArea()
         scroll.setWidget(self.preview)
         scroll.setWidgetResizable(False)
         layout.addWidget(scroll, 1)
         return panel
 
-    def choose_psd_directory(self) -> None:
-        selected = QFileDialog.getExistingDirectory(self, "Choose PSD directory")
-        if selected:
-            self._set_psd_input(Path(selected))
-
-    def choose_psd_file(self) -> None:
-        selected, _ = QFileDialog.getOpenFileName(
-            self, "Choose a layered PSD", filter="Photoshop (*.psd *.psb)"
+    def choose_input_directory(self) -> None:
+        selected = QFileDialog.getExistingDirectory(
+            self, "Choose recursive input directory"
         )
         if selected:
-            self._set_psd_input(Path(selected))
+            self._set_input(Path(selected))
 
-    def _set_psd_input(self, source: Path) -> None:
-        self.psd_path.setText(str(source))
-        parent = source.parent if source.is_file() else source
-        self.output_path.setText(str(parent / "predictions"))
+    def choose_input_file(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose a layered PSD, PSB, or PXD",
+            filter="Layered images (*.psd *.psb *.pxd)",
+        )
+        if selected:
+            self._set_input(Path(selected))
+
+    def _set_input(self, source: Path) -> None:
+        self.input_path.setText(str(source))
+        self.output_path.setText(str(DEFAULT_OUTPUT_DIR))
 
     def choose_output_directory(self) -> None:
-        selected = QFileDialog.getExistingDirectory(self, "Choose prediction output directory")
+        selected = QFileDialog.getExistingDirectory(
+            self, "Choose prediction output directory"
+        )
         if selected:
             self.output_path.setText(selected)
             self._populate_samples()
@@ -282,11 +334,17 @@ class AnalysisWindow(QMainWindow):
             self.checkpoint_path.setText(selected)
 
     def run_prediction(self) -> None:
-        psd_root = Path(self.psd_path.text()).expanduser()
+        input_root = Path(self.input_path.text()).expanduser()
         output_root = Path(self.output_path.text()).expanduser()
         checkpoint = Path(self.checkpoint_path.text()).expanduser()
-        if not psd_root.exists() or (psd_root.is_file() and psd_root.suffix.lower() not in {".psd", ".psb"}):
-            self._error("Choose a valid layered PSD/PSB file or directory.")
+        if not input_root.exists() or (
+            input_root.is_file()
+            and input_root.suffix.casefold() not in LAYERED_SUFFIXES
+        ):
+            self._error(
+                "Choose a valid PSD/PSB/PXD file or a directory containing "
+                "layered files and/or JPG/PNG sample folders."
+            )
             return
         if not checkpoint.is_file():
             self._error("Choose a valid best_model_ch48_deepsuper.pth checkpoint.")
@@ -298,7 +356,7 @@ class AnalysisWindow(QMainWindow):
         self.predict_button.setEnabled(False)
         self.status_label.setText("Running prediction…")
         self.log.clear()
-        self.worker = InferenceWorker(psd_root, output_root, checkpoint)
+        self.worker = InferenceWorker(input_root, output_root, checkpoint)
         self.worker.output.connect(self.log.appendPlainText)
         self.worker.completed.connect(self._prediction_finished)
         self.worker.start()
@@ -316,11 +374,19 @@ class AnalysisWindow(QMainWindow):
         if not text:
             return
         root = Path(text).expanduser()
-        samples = sorted(
-            directory.name
-            for directory in root.iterdir()
-            if directory.is_dir() and all((directory / f"{key}.png").is_file() for key in ("1c", "1d", "6a", "6b", "6c", "6d", "9a", "9d"))
-        ) if root.is_dir() else []
+        samples = (
+            sorted(
+                directory.relative_to(root).as_posix()
+                for directory in root.rglob("*")
+                if directory.is_dir()
+                and all(
+                    (directory / f"{key}.png").is_file()
+                    for key in ("1c", "1d", "6a", "6b", "6c", "6d", "9a", "9d")
+                )
+            )
+            if root.is_dir()
+            else []
+        )
         self.sample_combo.blockSignals(True)
         self.sample_combo.clear()
         self.sample_combo.addItems(samples)
@@ -328,7 +394,9 @@ class AnalysisWindow(QMainWindow):
         self._sample_changed(self.sample_combo.currentText())
         self.status_label.setText(f"Loaded {len(samples)} prediction sample(s)")
         if not samples:
-            self._error("No complete prediction folders were found in that output directory.")
+            self._error(
+                "No complete prediction folders were found in that output directory."
+            )
 
     def _sample_changed(self, _sample: str) -> None:
         self._clear_analysis()
@@ -337,21 +405,29 @@ class AnalysisWindow(QMainWindow):
         self.results = None
         self.signal_path = None
         self.visualizations.clear()
+        self._preview_pixmap = None
         self.table.setRowCount(0)
         self.visualization_combo.clear()
         self.preview.clear()
-        self.preview.setText("Analyze a sample to see the total five-zone contour visualization.")
+        self.preview.setText(
+            "Analyze a sample to see the total five-zone contour visualization."
+        )
         self.csv_button.setEnabled(False)
         self.visualization_button.setEnabled(False)
 
     def analyze(self) -> None:
         sample = self.sample_combo.currentText()
         if not sample:
-            self._error("Run prediction or load an existing prediction output first.")
+            self._error("Run prediction first.")
             return
         output_root = Path(self.output_path.text()).expanduser()
         prediction_dir = output_root / sample
-        self.signal_path = output_root / "_formatted_input" / sample / f"{self.background_combo.currentText()}.png"
+        self.signal_path = (
+            output_root
+            / "_formatted_input"
+            / sample
+            / f"{self.background_combo.currentText()}.png"
+        )
         try:
             self.results = analyze_zones(
                 prediction_dir,
@@ -359,9 +435,13 @@ class AnalysisWindow(QMainWindow):
                 side_exclusion=SIDE_EXCLUSION,
                 pixel_size_um=self.pixel_size.value(),
             )
-            self.visualizations = {"All zones": render_all_zones(self.signal_path, self.results)}
+            self.visualizations = {
+                "All zones": render_all_zones(self.signal_path, self.results)
+            }
             for name, result in self.results.items():
-                self.visualizations[name] = render_zone_measurement(self.signal_path, result)
+                self.visualizations[name] = render_zone_measurement(
+                    self.signal_path, result
+                )
         except Exception as exc:
             self._error(str(exc))
             return
@@ -394,14 +474,32 @@ class AnalysisWindow(QMainWindow):
         image = self.visualizations.get(name)
         if image is None:
             return
-        self.preview.setPixmap(QPixmap.fromImage(ImageQt(image)))
+        rgb = image.convert("RGB")
+        raw = rgb.tobytes("raw", "RGB")
+        qimage = QImage(
+            raw,
+            rgb.width,
+            rgb.height,
+            rgb.width * 3,
+            QImage.Format.Format_RGB888,
+        ).copy()
+        # Keep a persistent pixmap owned by the window. This prevents the Qt
+        # preview from retaining a temporary Pillow buffer after a save dialog.
+        self._preview_pixmap = QPixmap.fromImage(qimage)
+        self.preview.setPixmap(self._preview_pixmap)
         self.preview.adjustSize()
 
     def export_csv(self) -> None:
         if not self.results:
             return
         sample = self.sample_combo.currentText()
-        default = Path(self.output_path.text()).expanduser() / "Zone_analysis" / sample / "zone_measurements.csv"
+        default = (
+            Path(self.output_path.text()).expanduser()
+            / "Zone_analysis"
+            / sample
+            / "zone_measurements.csv"
+        )
+        default.parent.mkdir(parents=True, exist_ok=True)
         selected, _ = QFileDialog.getSaveFileName(
             self, "Export zone measurements", str(default), "CSV file (*.csv)"
         )
@@ -413,15 +511,33 @@ class AnalysisWindow(QMainWindow):
         if not self.results or self.signal_path is None:
             return
         sample = self.sample_combo.currentText()
-        default = Path(self.output_path.text()).expanduser() / "Zone_analysis" / sample
+        analysis_root = Path(self.output_path.text()).expanduser() / "Zone_analysis"
+        analysis_root.mkdir(parents=True, exist_ok=True)
         selected = QFileDialog.getExistingDirectory(
-            self, "Choose zone visualization directory", str(default.parent)
+            self, "Choose zone visualization directory", str(analysis_root)
         )
         if selected:
-            output_dir = Path(selected) / sample if Path(selected).name != sample else Path(selected)
-            paths = save_zone_visualizations(self.signal_path, self.results, output_dir)
-            csv_path = export_zone_csv(self.results, output_dir / "zone_measurements.csv")
-            self.status_label.setText(f"Saved {len(paths)} images/masks and {csv_path.name} in {output_dir}")
+            selected_path = Path(selected)
+            sample_path = Path(sample)
+            output_dir = (
+                selected_path
+                if _path_ends_with(selected_path, sample_path)
+                else selected_path / sample_path
+            )
+            try:
+                paths = save_zone_visualizations(
+                    self.signal_path, self.results, output_dir
+                )
+                csv_path = export_zone_csv(
+                    self.results, output_dir / "zone_measurements.csv"
+                )
+            except Exception as exc:
+                self._error(str(exc))
+                return
+            self._show_visualization(self.visualization_combo.currentText())
+            self.status_label.setText(
+                f"Saved {len(paths)} images/masks and {csv_path.name} in {output_dir}"
+            )
 
     def _error(self, text: str) -> None:
         QMessageBox.critical(self, "Five-zone analysis", text)

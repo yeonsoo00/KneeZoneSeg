@@ -36,11 +36,14 @@ After running inference, you would get predictions (masks) in png for all the li
 ```
 python inference.py --image_root "where/your/images/are" --output_dir "where/you/want/to/save/results"
 ```
-OR
+OR, for a recursive mixture of PSD/PSB/PXD files and JPG/PNG sample folders:
 
 ```
-python inference.py --psd_root "where/your/images/are" --output_dir "where/you/want/to/save/results"
+python inference.py --input_root "where/your/images/are" --output_dir "where/you/want/to/save/results"
 ```
+
+Nested input paths are preserved under the prediction output directory. The
+GUI uses `KneeZoneSeg/Prediction` as its default output.
 
 ## Final model and GUI
 

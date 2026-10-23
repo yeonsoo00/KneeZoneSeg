@@ -9,6 +9,7 @@ from pathlib import Path
 from format_layered_psd import (
     STAIN_BY_NUMBER,
     find_psd_files,
+    layered_sample_name,
     numbered_layers,
     render_layer_on_canvas,
 )
@@ -75,23 +76,36 @@ def format_psd_dataset(
 
     files = find_psd_files(psd_source)
     if not files:
-        raise FileNotFoundError(f"No .psd or .psb files found under: {psd_source}")
+        raise FileNotFoundError(
+            f"No .psd, .psb, or .pxd files found under: {psd_source}"
+        )
 
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     sample_names: set[str] = set()
     for source in files:
-        sample = source.stem.strip()
-        if sample in sample_names:
-            raise ValueError(f"Multiple PSD files have the same sample name: {sample!r}")
-        sample_names.add(sample)
+        sample = layered_sample_name(source, psd_source)
+        sample_key = sample.casefold()
+        if sample_key in sample_names:
+            raise ValueError(
+                f"Multiple layered files resolve to the same sample path: {sample!r}"
+            )
+        sample_names.add(sample_key)
 
-        psd = PSDImage.open(source)
+        try:
+            psd = PSDImage.open(source)
+        except Exception as exc:
+            raise ValueError(
+                f"Could not open layered file {source}. PXD input must contain "
+                "Photoshop-compatible layered image data."
+            ) from exc
         layers = numbered_layers(psd)
         missing = sorted(set(STAIN_BY_NUMBER) - set(layers))
         if missing:
             names = ", ".join(f"{n}_ ({STAIN_BY_NUMBER[n]})" for n in missing)
-            raise ValueError(f"PSD {source.name!r} is missing required signal layers: {names}")
+            raise ValueError(
+                f"Layered file {source.name!r} is missing required signal layers: {names}"
+            )
 
         layer_boxes = {
             number: layer_canvas_box(layers[number], psd.size)
@@ -99,7 +113,7 @@ def format_psd_dataset(
         }
         crop_box = common_crop_box(layers, psd.size)
         metadata = {
-            "source_psd": str(source.resolve()),
+            "source_document": str(source.resolve()),
             "source_size_bytes": source.stat().st_size,
             "source_mtime_ns": source.stat().st_mtime_ns,
             "psd_size": list(psd.size),
@@ -132,19 +146,25 @@ def format_psd_dataset(
 
         metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
         width, height = metadata["cropped_size"]
-        print(f"  {sample}: common PSD crop {crop_box} -> {width}x{height}")
+        print(
+            f"  {sample}: common layered-document crop {crop_box} -> {width}x{height}"
+        )
 
-    print(f"Formatted {len(files)} common-cropped PSD sample(s) in {output_root}")
+    print(f"Formatted {len(files)} common-cropped layered sample(s) in {output_root}")
     return output_root
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Export aligned PSD signals using their common crop window"
+        description="Export aligned layered-document signals using their common crop window"
     )
-    parser.add_argument("psd_source", help="One layered PSD/PSB or a directory containing them")
+    parser.add_argument(
+        "psd_source", help="One layered PSD/PSB/PXD or a directory containing them"
+    )
     parser.add_argument("output_root", help="Directory for model-ready sample folders")
-    parser.add_argument("--overwrite", action="store_true", help="Re-render existing PNG files")
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Re-render existing PNG files"
+    )
     return parser.parse_args()
 
 

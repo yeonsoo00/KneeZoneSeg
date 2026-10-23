@@ -25,13 +25,20 @@ Launch the application from the `KneeZoneSeg/UI` directory:
 python3 analyze_qt6.py
 ```
 
-1. Choose one layered PSD/PSB file, or a directory containing layered PSDs.
-   Each PSD is one sample. Its layers must start with `1_` through `9_`:
+1. Choose one layered PSD/PSB/PXD file, or a directory. Directory input is
+   recursive and may mix layered files with sample folders of JPG/PNG signals.
+   Each layered document is one sample. Its layers must start with `1_` through `9_`:
    1=Mineral, 2=AC, 3=Calcein, 4=TRAP, 5=DAPI, 6=AP, 7=EdU, 8=CFO,
    and 9=SFO. Text after the underscore is ignored.
-2. Confirm the prediction output directory and model checkpoint.
+   Each JPG/PNG sample folder must contain those stains using either their
+   stain names (`mineral.png`, `ac.jpg`, and so on) or numbered names. EdU is
+   optional and becomes a black placeholder when absent.
+2. Confirm the prediction output directory and model checkpoint. The default
+   output is `KneeZoneSeg/Prediction`.
 3. Click **Predict**. Converted PNG inputs are retained in
-   `<prediction output>/_formatted_input`.
+   `<prediction output>/_formatted_input`. Nested input paths are preserved for
+   both formatted signals and prediction folders, preventing duplicate sample
+   names in different directories from overwriting one another.
 4. Choose a sample and analysis background (SFO by default), then click
    **Analyze five zones**.
 5. Use **Export measurements to CSV** and **Save zone visualizations** to save
@@ -66,8 +73,8 @@ Pixel values and physical units are both exported. The default calibration is
 **Save zone visualizations** writes:
 
 - the five binary zone masks;
-- one measurement visualization per zone, with red contour, blue analyzed
-  edges, and sampled green thickness lines;
+- one measurement visualization per zone, with a thin red contour and no
+  measurement or edge guide lines;
 - `All_zones_contour_overlay.png`, containing all five colored zones and their
   contour outlines;
 - `zone_measurements.csv`.

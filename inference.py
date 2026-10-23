@@ -47,7 +47,8 @@ import torch.nn.functional as F
 from typing import List, Tuple, Dict
 from data import SIGNAL_FILES
 from tqdm import tqdm
-from common_crop_psd import find_psd_files, format_psd_dataset
+from common_crop_psd import find_psd_files
+from input_preparation import prepare_input_dataset
 from mask_cleanup import finalize_binary_mask
 
 
@@ -64,7 +65,8 @@ DEFAULT_CHECKPOINT = next(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run inference with trained knee segmentation model")
     parser.add_argument('--image_root', type=str, default='/home/yec23006/projects/research/KneeGrowthPlate/ZoneSeg/Input/Testdata/Image/', help='Root directory of input images')
-    parser.add_argument('--psd_root', type=str, default='', help='Directory containing numbered PSD files; format these automatically before inference')
+    parser.add_argument('--input_root', type=str, default='', help='One PSD/PSB/PXD file or a recursive directory containing layered files and JPG/PNG sample folders')
+    parser.add_argument('--psd_root', type=str, default='', help='Legacy alias for --input_root')
     parser.add_argument('--formatted_root', type=str, default='', help='Converted input directory (default: <output_dir>/_formatted_input)')
     parser.add_argument('--overwrite_formatted', action='store_true', help='Re-render already formatted PNG files')
     parser.add_argument('--checkpoint', type=str, default=str(DEFAULT_CHECKPOINT), help='Path to best_model_ch48_deepsuper.pth')
@@ -122,16 +124,17 @@ def main() -> None:
     if not 0.0 <= args.prediction_threshold <= 1.0:
         raise ValueError("prediction_threshold must be between 0 and 1")
 
-    # --image_root can also point directly to a directory containing PSDs.
-    psd_root = args.psd_root
-    if not psd_root:
+    # Normalize mixed recursive inputs before model inference. --psd_root is
+    # retained as a backwards-compatible alias for older commands.
+    input_root = args.input_root or args.psd_root
+    if not input_root:
         candidate_root = Path(args.image_root)
         if candidate_root.exists() and find_psd_files(candidate_root):
-            psd_root = str(candidate_root)
-    if psd_root:
+            input_root = str(candidate_root)
+    if input_root:
         formatted_root = Path(args.formatted_root) if args.formatted_root else Path(args.output_dir) / '_formatted_input'
-        args.image_root = str(format_psd_dataset(
-            psd_root, formatted_root, overwrite=args.overwrite_formatted
+        args.image_root = str(prepare_input_dataset(
+            input_root, formatted_root, overwrite=args.overwrite_formatted
         ))
 
     samples = list_samples(args.image_root)

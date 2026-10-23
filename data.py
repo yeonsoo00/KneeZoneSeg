@@ -591,13 +591,21 @@ class KneeZoneDataset(Dataset):
 
 
 def list_samples(root: str | Path) -> List[str]:
-    """List all sample directories under a given root.
-
-    This helper assumes that each subdirectory under `root` corresponds to
-    one sample.  It returns the names of all subdirectories (not full
-    paths).
-    """
+    """List recursive sample directories containing recognized signal images."""
     root_path = Path(root)
-    samples = [p.name for p in root_path.iterdir() if p.is_dir()]
+    if not root_path.is_dir():
+        return []
+    required = set(SIGNAL_FILES) - {"edu"}
+    samples = []
+    for directory in root_path.rglob("*"):
+        if not directory.is_dir():
+            continue
+        available = {
+            stain
+            for stain, filenames in SIGNAL_FILES.items()
+            if any((directory / filename).is_file() for filename in filenames)
+        }
+        if required.issubset(available):
+            samples.append(directory.relative_to(root_path).as_posix())
     samples.sort()
     return samples

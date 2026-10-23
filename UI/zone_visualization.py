@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping
 
+import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -19,11 +20,16 @@ ZONE_COLORS = {
     "GP": (255, 165, 0),
 }
 
+INDIVIDUAL_CONTOUR_WIDTH = 2.0 * 0.70
+CONTOUR_SUPERSAMPLE = 5
+
 
 def _load_background(signal_path: str | Path, shape: tuple[int, int]) -> np.ndarray:
     height, width = shape
-    image = Image.open(signal_path).convert("RGB").resize(
-        (width, height), Image.Resampling.BILINEAR
+    image = (
+        Image.open(signal_path)
+        .convert("RGB")
+        .resize((width, height), Image.Resampling.BILINEAR)
     )
     array = np.asarray(image, dtype=np.float32)
     low = float(array.min())
@@ -59,7 +65,9 @@ def _contour(mask: np.ndarray, thickness: int = 1) -> np.ndarray:
     return boundary
 
 
-def _blend(canvas: np.ndarray, mask: np.ndarray, color: tuple[int, int, int], alpha: float) -> None:
+def _blend(
+    canvas: np.ndarray, mask: np.ndarray, color: tuple[int, int, int], alpha: float
+) -> None:
     if mask.any():
         canvas[mask] = (
             (1.0 - alpha) * canvas[mask].astype(np.float32)
@@ -67,27 +75,64 @@ def _blend(canvas: np.ndarray, mask: np.ndarray, color: tuple[int, int, int], al
         ).astype(np.uint8)
 
 
+def _draw_antialiased_contour(
+    canvas: np.ndarray,
+    mask: np.ndarray,
+    color: tuple[int, int, int],
+    width: float,
+) -> None:
+    """Draw a subpixel-width contour by rendering large and downsampling."""
+    height, image_width = mask.shape
+    contours, _ = cv2.findContours(
+        mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if not contours:
+        return
+    scale = CONTOUR_SUPERSAMPLE
+    alpha_large = np.zeros((height * scale, image_width * scale), dtype=np.uint8)
+    scaled_contours = [contour.astype(np.int32) * scale for contour in contours]
+    cv2.drawContours(
+        alpha_large,
+        scaled_contours,
+        -1,
+        255,
+        thickness=max(1, round(width * scale)),
+        lineType=cv2.LINE_AA,
+    )
+    alpha = (
+        np.asarray(
+            Image.fromarray(alpha_large).resize(
+                (image_width, height), Image.Resampling.LANCZOS
+            ),
+            dtype=np.float32,
+        )
+        / 255.0
+    )
+    alpha = alpha[..., None]
+    canvas[:] = np.clip(
+        canvas.astype(np.float32) * (1.0 - alpha)
+        + np.asarray(color, dtype=np.float32) * alpha,
+        0,
+        255,
+    ).astype(np.uint8)
+
+
 def render_zone_measurement(
     signal_path: str | Path,
     result: ZoneResult,
 ) -> Image.Image:
-    """Render one zone with contour, analyzed edges, and sampled thicknesses."""
+    """Render one zone with a compact red contour and summary annotation."""
     canvas = _load_background(signal_path, result.mask.shape)
     color = ZONE_COLORS[result.name]
     _blend(canvas, result.mask, color, 0.28)
-    canvas[_contour(result.mask, 2)] = (255, 35, 35)
+    _draw_antialiased_contour(
+        canvas,
+        result.mask,
+        (255, 35, 35),
+        INDIVIDUAL_CONTOUR_WIDTH,
+    )
     image = Image.fromarray(canvas, mode="RGB")
     draw = ImageDraw.Draw(image)
-    height = result.mask.shape[0]
-    draw.line((result.x_start, 0, result.x_start, height - 1), fill=(30, 120, 255), width=2)
-    draw.line((result.x_end, 0, result.x_end, height - 1), fill=(30, 120, 255), width=2)
-    for index in range(0, result.thickness_x.size, 15):
-        x = int(result.thickness_x[index])
-        draw.line(
-            (x, int(result.thickness_top[index]), x, int(result.thickness_bottom[index])),
-            fill=(20, 235, 70),
-            width=1,
-        )
     text = (
         f"{result.name} ({result.boundary_1}-{result.boundary_2})\n"
         f"central 90%; area {result.area_px:,} px2\n"
@@ -112,7 +157,11 @@ def render_all_zones(
 
     # GP spans the full plate, so draw it first with a lighter fill. The four
     # biological subzones remain visible above it.
-    order = [name for name in ("GP", "Germinal", "Columnar", "Pre-hypertrophic", "Hypertrophic") if name in results]
+    order = [
+        name
+        for name in ("GP", "Germinal", "Columnar", "Pre-hypertrophic", "Hypertrophic")
+        if name in results
+    ]
     for name in order:
         result = results[name]
         alpha = 0.08 if name == "GP" else 0.28
@@ -134,7 +183,12 @@ def render_all_zones(
         draw.rectangle((width + 14, y, width + 34, y + 14), fill=color, outline=color)
         draw.text((width + 42, y), name, fill=(0, 0, 0))
         y += 28
-    draw.text((width + 14, y + 12), "5% removed from\neach horizontal edge", fill=(55, 55, 55), spacing=3)
+    draw.text(
+        (width + 14, y + 12),
+        "5% removed from\neach horizontal edge",
+        fill=(55, 55, 55),
+        spacing=3,
+    )
     return total
 
 
