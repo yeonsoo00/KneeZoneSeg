@@ -51,16 +51,19 @@ from zone_visualization import (
 APP_DIR = Path(__file__).resolve().parent
 PACKAGE_DIR = APP_DIR.parent
 DEFAULT_OUTPUT_DIR = PACKAGE_DIR / "Prediction"
+DEFAULT_OUTPUT_PLACEHOLDER = "KneeZoneSeg/Prediction"
+DEFAULT_CHECKPOINT_PLACEHOLDER = "ckpt/best_model_ch48_super.pth"
 LAYERED_SUFFIXES = frozenset({".psd", ".psb", ".pxd"})
 
 
 def default_checkpoint() -> Path:
     candidates = (
-        PACKAGE_DIR / "ckpt" / "best_model_ch48_deepsuper.pth",
+        PACKAGE_DIR / "ckpt" / "best_model_ch48_super.pth",
         PACKAGE_DIR.parent
         / "SemiSeparatedUnetFusion"
         / "ckpt"
-        / "best_model_ch48_deepsuper.pth",
+        / "groupnorm_deepsuper"
+        / "best_model_ch48_super.pth",
     )
     return next((path for path in candidates if path.is_file()), candidates[0])
 
@@ -164,6 +167,7 @@ class AnalysisWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(line_edit, 1)
         button = QPushButton(text)
+        button.setFixedWidth(button.sizeHint().width())
         button.clicked.connect(callback)
         layout.addWidget(button)
         return widget
@@ -175,16 +179,19 @@ class AnalysisWindow(QMainWindow):
         self.input_path.setPlaceholderText(
             "PSD/PSB/PXD file, or recursive directory of layered files and JPG/PNG sample folders"
         )
-        self.output_path = QLineEdit(str(DEFAULT_OUTPUT_DIR))
-        self.output_path.setPlaceholderText("Prediction output directory")
+        self.output_path = QLineEdit()
+        self.output_path.setPlaceholderText(DEFAULT_OUTPUT_PLACEHOLDER)
         self.output_path.editingFinished.connect(self._populate_samples)
-        self.checkpoint_path = QLineEdit(str(DEFAULT_CHECKPOINT))
+        self.checkpoint_path = QLineEdit()
+        self.checkpoint_path.setPlaceholderText(DEFAULT_CHECKPOINT_PLACEHOLDER)
 
         layout.addWidget(QLabel("Input"), 0, 0)
         layout.addWidget(
             self._path_row(self.input_path, self.choose_input_directory), 0, 1
         )
-        file_button = QPushButton("Choose PSD/PXD…")
+        file_button = QPushButton("Browse…")
+        file_button.setFixedWidth(file_button.sizeHint().width())
+        file_button.setToolTip("Choose one layered PSD, PSB, or PXD file")
         file_button.clicked.connect(self.choose_input_file)
         layout.addWidget(file_button, 0, 2)
         layout.addWidget(QLabel("Prediction output"), 1, 0)
@@ -196,7 +203,7 @@ class AnalysisWindow(QMainWindow):
             self._path_row(self.checkpoint_path, self.choose_checkpoint), 2, 1, 1, 2
         )
 
-        self.predict_button = QPushButton("Predict with best_model_ch48_deepsuper.pth")
+        self.predict_button = QPushButton("Predict with best_model_ch48_super.pth")
         self.predict_button.clicked.connect(self.run_prediction)
         self.status_label = QLabel("Ready")
         layout.addWidget(self.predict_button, 3, 0, 1, 2)
@@ -316,7 +323,14 @@ class AnalysisWindow(QMainWindow):
 
     def _set_input(self, source: Path) -> None:
         self.input_path.setText(str(source))
-        self.output_path.setText(str(DEFAULT_OUTPUT_DIR))
+
+    def _output_root(self) -> Path:
+        text = self.output_path.text().strip()
+        return Path(text).expanduser() if text else DEFAULT_OUTPUT_DIR
+
+    def _checkpoint(self) -> Path:
+        text = self.checkpoint_path.text().strip()
+        return Path(text).expanduser() if text else DEFAULT_CHECKPOINT
 
     def choose_output_directory(self) -> None:
         selected = QFileDialog.getExistingDirectory(
@@ -334,12 +348,17 @@ class AnalysisWindow(QMainWindow):
             self.checkpoint_path.setText(selected)
 
     def run_prediction(self) -> None:
-        input_root = Path(self.input_path.text()).expanduser()
-        output_root = Path(self.output_path.text()).expanduser()
-        checkpoint = Path(self.checkpoint_path.text()).expanduser()
-        if not input_root.exists() or (
-            input_root.is_file()
-            and input_root.suffix.casefold() not in LAYERED_SUFFIXES
+        input_text = self.input_path.text().strip()
+        input_root = Path(input_text).expanduser()
+        output_root = self._output_root()
+        checkpoint = self._checkpoint()
+        if (
+            not input_text
+            or not input_root.exists()
+            or (
+                input_root.is_file()
+                and input_root.suffix.casefold() not in LAYERED_SUFFIXES
+            )
         ):
             self._error(
                 "Choose a valid PSD/PSB/PXD file or a directory containing "
@@ -347,10 +366,10 @@ class AnalysisWindow(QMainWindow):
             )
             return
         if not checkpoint.is_file():
-            self._error("Choose a valid best_model_ch48_deepsuper.pth checkpoint.")
-            return
-        if not self.output_path.text().strip():
-            self._error("Choose a prediction output directory.")
+            self._error(
+                "The default ckpt/best_model_ch48_super.pth checkpoint was not "
+                "found. Copy it there or choose another checkpoint."
+            )
             return
         output_root.mkdir(parents=True, exist_ok=True)
         self.predict_button.setEnabled(False)
@@ -370,10 +389,7 @@ class AnalysisWindow(QMainWindow):
             self._error(message + "\n\nSee the prediction log for details.")
 
     def _populate_samples(self) -> None:
-        text = self.output_path.text().strip()
-        if not text:
-            return
-        root = Path(text).expanduser()
+        root = self._output_root()
         samples = (
             sorted(
                 directory.relative_to(root).as_posix()
@@ -420,7 +436,7 @@ class AnalysisWindow(QMainWindow):
         if not sample:
             self._error("Run prediction first.")
             return
-        output_root = Path(self.output_path.text()).expanduser()
+        output_root = self._output_root()
         prediction_dir = output_root / sample
         self.signal_path = (
             output_root
@@ -494,10 +510,7 @@ class AnalysisWindow(QMainWindow):
             return
         sample = self.sample_combo.currentText()
         default = (
-            Path(self.output_path.text()).expanduser()
-            / "Zone_analysis"
-            / sample
-            / "zone_measurements.csv"
+            self._output_root() / "Zone_analysis" / sample / "zone_measurements.csv"
         )
         default.parent.mkdir(parents=True, exist_ok=True)
         selected, _ = QFileDialog.getSaveFileName(
@@ -511,7 +524,7 @@ class AnalysisWindow(QMainWindow):
         if not self.results or self.signal_path is None:
             return
         sample = self.sample_combo.currentText()
-        analysis_root = Path(self.output_path.text()).expanduser() / "Zone_analysis"
+        analysis_root = self._output_root() / "Zone_analysis"
         analysis_root.mkdir(parents=True, exist_ok=True)
         selected = QFileDialog.getExistingDirectory(
             self, "Choose zone visualization directory", str(analysis_root)

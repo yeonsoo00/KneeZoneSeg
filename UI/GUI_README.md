@@ -14,10 +14,10 @@ On Windows, activate the environment with `.venv\Scripts\activate` instead.
 For an NVIDIA-specific PyTorch build, install PyTorch using the command from
 <https://pytorch.org/get-started/locally/> before installing `environment.txt`.
 
-Place the final checkpoint at `KneeZoneSeg/ckpt/best_model_ch48_deepsuper.pth`,
-or select the existing checkpoint in the GUI. When this repository is kept
-inside the ZoneSeg workspace, the GUI automatically finds
-`SemiSeparatedUnetFusion/ckpt/best_model_ch48_deepsuper.pth`.
+Place the default checkpoint at `KneeZoneSeg/ckpt/best_model_ch48_super.pth`.
+The checkpoint field may be left blank; inside the full ZoneSeg workspace, the
+GUI also automatically finds
+`SemiSeparatedUnetFusion/ckpt/groupnorm_deepsuper/best_model_ch48_super.pth`.
 
 Launch the application from the `KneeZoneSeg/UI` directory:
 
@@ -33,8 +33,8 @@ python3 analyze_qt6.py
    Each JPG/PNG sample folder must contain those stains using either their
    stain names (`mineral.png`, `ac.jpg`, and so on) or numbered names. EdU is
    optional and becomes a black placeholder when absent.
-2. Confirm the prediction output directory and model checkpoint. The default
-   output is `KneeZoneSeg/Prediction`.
+2. The prediction output and checkpoint fields are optional. Leave them blank
+   to use `KneeZoneSeg/Prediction` and `ckpt/best_model_ch48_super.pth`.
 3. Click **Predict**. Converted PNG inputs are retained in
    `<prediction output>/_formatted_input`. Nested input paths are preserved for
    both formatted signals and prediction folders, preventing duplicate sample
