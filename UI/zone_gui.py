@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -48,9 +49,18 @@ from zone_visualization import (
 )
 
 
-APP_DIR = Path(__file__).resolve().parent
-PACKAGE_DIR = APP_DIR.parent
-DEFAULT_OUTPUT_DIR = PACKAGE_DIR / "Prediction"
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+if IS_FROZEN:
+    PACKAGE_DIR = Path(sys._MEIPASS)
+    APP_DIR = PACKAGE_DIR / "UI"
+else:
+    APP_DIR = Path(__file__).resolve().parent
+    PACKAGE_DIR = APP_DIR.parent
+DEFAULT_OUTPUT_DIR = (
+    Path.home() / "KneeZoneSeg" / "Prediction"
+    if IS_FROZEN
+    else PACKAGE_DIR / "Prediction"
+)
 DEFAULT_OUTPUT_PLACEHOLDER = "KneeZoneSeg/Prediction"
 DEFAULT_CHECKPOINT_PLACEHOLDER = "ckpt/best_model_ch48_super.pth"
 LAYERED_SUFFIXES = frozenset({".psd", ".psb", ".pxd"})
@@ -90,9 +100,7 @@ class InferenceWorker(QThread):
         self.checkpoint = checkpoint
 
     def run(self) -> None:
-        command = [
-            sys.executable,
-            str(PACKAGE_DIR / "inference.py"),
+        inference_args = [
             "--input_root",
             str(self.input_root),
             "--output_dir",
@@ -113,10 +121,22 @@ class InferenceWorker(QThread):
             "--img_size",
             "512",
         ]
+        if IS_FROZEN:
+            command = [sys.executable, "--run-inference", *inference_args]
+        else:
+            command = [
+                sys.executable,
+                str(PACKAGE_DIR / "inference.py"),
+                *inference_args,
+            ]
         try:
+            environment = dict(os.environ)
+            environment["PYTHONUNBUFFERED"] = "1"
+            environment.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
             process = subprocess.Popen(
                 command,
                 cwd=PACKAGE_DIR,
+                env=environment,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -558,6 +578,11 @@ class AnalysisWindow(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
+    app.setApplicationName("ZS")
+    app.setOrganizationName("KneeZoneSeg")
+    icon_path = APP_DIR / "ZS_icon.png"
+    if icon_path.is_file():
+        app.setWindowIcon(QIcon(str(icon_path)))
     window = AnalysisWindow()
     window.show()
     sys.exit(app.exec())

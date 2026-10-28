@@ -1,0 +1,12 @@
+# Native Apple-Silicon Python 3.11 is recommended.
+# These are the runtime and build dependencies for ZS.app.
+
+torch>=2.5,<3
+numpy>=2.0,<2.3
+Pillow>=10,<13
+scipy>=1.14,<2
+tqdm>=4.66,<5
+opencv-python-headless>=4.12,<5
+psd-tools>=1.10.7,<2
+PyQt6>=6.6,<7
+pyinstaller>=6.22,<7

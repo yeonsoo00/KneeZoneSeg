@@ -1,0 +1,9 @@
+.DS_Store
+__pycache__/
+UI/__pycache__/
+build/
+build_macos/
+dist/
+Prediction/
+*.dmg
+ZS-macos-arm64.zip

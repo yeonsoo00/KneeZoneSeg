@@ -270,8 +270,14 @@ def main() -> None:
         group_norm_groups=args.group_norm_groups,
         deep_supervision=args.deep_supervision,
     )
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    state_dict = torch.load(args.checkpoint, map_location=device, weights_only=True)
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
+    print(f'Using inference device: {device}')
+    state_dict = torch.load(args.checkpoint, map_location='cpu', weights_only=True)
     model.load_state_dict(state_dict)
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)

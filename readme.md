@@ -71,3 +71,10 @@ Hypertrophic, and total GP zones. It removes 5% from each horizontal edge of
 each boundary pair, reports zone geometry and signal intensity, exports CSV,
 and saves individual and combined contour visualizations. See
 `UI/GUI_README.md` for the exact zone definitions and export contents.
+
+## Apple-Silicon application
+
+The repository includes an ARM64 PyInstaller definition for building the GUI
+as `ZS.app`. Build and installation instructions are in `MACOS_APP.md`. The
+resulting app bundles the model and all Python dependencies, so end users do
+not need a Python environment.
