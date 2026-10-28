@@ -32,7 +32,7 @@ if not ICON_ICNS.is_file():
     )
 
 hidden_imports = collect_submodules("psd_tools")
-hidden_imports.extend(["cv2", "scipy.ndimage"])
+hidden_imports.append("scipy.ndimage")
 
 analysis = Analysis(
     [str(PROJECT_DIR / "zs_app.py")],
@@ -47,7 +47,7 @@ analysis = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["IPython", "jupyterlab", "matplotlib", "notebook", "pandas"],
+    excludes=["IPython", "cv2", "jupyterlab", "matplotlib", "notebook", "pandas"],
     noarchive=False,
     optimize=0,
 )
@@ -84,7 +84,7 @@ application = BUNDLE(
     name="ZS.app",
     icon=str(ICON_ICNS),
     bundle_identifier="org.kneezoneseg.zs",
-    version="1.0.0",
+    version="1.0.1",
     info_plist={
         "CFBundleDisplayName": "ZS",
         "CFBundleName": "ZS",

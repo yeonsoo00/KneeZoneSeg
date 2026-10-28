@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import cv2
 import numpy as np
 from scipy import ndimage
 
@@ -10,12 +9,15 @@ from scipy import ndimage
 def largest_connected_component(mask: np.ndarray) -> np.ndarray:
     """Return only the largest 8-connected foreground component."""
     binary = (np.asarray(mask) > 0).astype(np.uint8)
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(
-        binary, connectivity=8
+    labels, count = ndimage.label(
+        binary,
+        structure=np.ones((3, 3), dtype=np.uint8),
     )
-    if count <= 1:
+    if count == 0:
         return np.zeros_like(binary, dtype=np.uint8)
-    largest_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    sizes = np.bincount(labels.ravel())
+    sizes[0] = 0
+    largest_label = int(np.argmax(sizes))
     return (labels == largest_label).astype(np.uint8)
 
 

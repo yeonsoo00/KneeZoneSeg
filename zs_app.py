@@ -36,6 +36,18 @@ def _restore_output_streams() -> None:
 
 def main() -> int:
     multiprocessing.freeze_support()
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        _restore_output_streams()
+        from zone_gui import DEFAULT_CHECKPOINT
+        from inference import main as _inference_main  # noqa: F401
+
+        if not DEFAULT_CHECKPOINT.is_file():
+            raise FileNotFoundError(
+                f"Bundled checkpoint was not found: {DEFAULT_CHECKPOINT}"
+            )
+        print(f"ZS self-test passed; checkpoint={DEFAULT_CHECKPOINT}")
+        return 0
+
     if len(sys.argv) > 1 and sys.argv[1] == "--run-inference":
         _restore_output_streams()
         sys.argv = [sys.argv[0], *sys.argv[2:]]

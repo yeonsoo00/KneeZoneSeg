@@ -1,7 +1,7 @@
 # ZS macOS application
 
 `ZS.app` is an ARM64 Apple-Silicon application built with PyInstaller. The app
-contains Python, PyTorch, PyQt6, OpenCV, PSD support, the UI icon, and the model
+contains Python, PyTorch, PyQt6, PSD support, the UI icon, and the model
 checkpoint. End users do not install Python or any packages.
 
 PyInstaller builds are operating-system specific. Build this application on a
@@ -40,6 +40,9 @@ chmod +x build_macos_app.sh
 ./build_macos_app.sh
 ```
 
+The build script runs an import and checkpoint self-test against the completed
+bundle. It stops instead of installing a broken application if that test fails.
+
 The result is:
 
 ```text
@@ -74,6 +77,22 @@ For a quick internal installation:
 
 No Python environment, checkpoint file, or command-line setup is needed on the
 target Mac.
+
+## Replace an older ZS build
+
+Do not merge a new bundle into an existing `/Applications/ZS.app`, because
+obsolete packaged libraries can remain inside it. Quit ZS, move the old app to
+Trash, and then copy the newly built `dist/ZS.app` into `/Applications`.
+
+You can verify the new bundle before copying it:
+
+```bash
+dist/ZS.app/Contents/MacOS/ZS --self-test
+```
+
+The command must report `ZS self-test passed`. If Finder blocks an internally
+built, ad-hoc-signed copy, Control-click **ZS**, choose **Open**, and confirm the
+prompt. Developer-ID-signed and notarized releases do not require this step.
 
 ## Signed distribution
 

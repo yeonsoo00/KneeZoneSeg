@@ -58,6 +58,9 @@ iconutil -c icns "$ICONSET_DIR" -o "$ICON_OUTPUT"
 cd "$PROJECT_DIR"
 python3 -m PyInstaller --noconfirm --clean ZS.spec
 
+echo "Running bundled application self-test..."
+"$PROJECT_DIR/dist/ZS.app/Contents/MacOS/ZS" --self-test
+
 echo
 echo "Built $PROJECT_DIR/dist/ZS.app"
 echo "Test it with: open '$PROJECT_DIR/dist/ZS.app'"

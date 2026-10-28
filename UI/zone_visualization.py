@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping
 
-import cv2
 import numpy as np
 from PIL import Image, ImageDraw
+from scipy import ndimage
 
 from zone_metrics import ZoneResult, save_zone_masks
 
@@ -83,22 +83,34 @@ def _draw_antialiased_contour(
 ) -> None:
     """Draw a subpixel-width contour by rendering large and downsampling."""
     height, image_width = mask.shape
-    contours, _ = cv2.findContours(
-        mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
-    )
-    if not contours:
+    if not mask.any():
         return
     scale = CONTOUR_SUPERSAMPLE
-    alpha_large = np.zeros((height * scale, image_width * scale), dtype=np.uint8)
-    scaled_contours = [contour.astype(np.int32) * scale for contour in contours]
-    cv2.drawContours(
-        alpha_large,
-        scaled_contours,
-        -1,
-        255,
-        thickness=max(1, round(width * scale)),
-        lineType=cv2.LINE_AA,
+    mask_large = np.repeat(np.repeat(mask.astype(bool), scale, axis=0), scale, axis=1)
+    thickness = max(1, round(width * scale))
+    outside = thickness // 2
+    inside = thickness - outside
+    structure = np.ones((3, 3), dtype=bool)
+    outer = (
+        ndimage.binary_dilation(
+            mask_large,
+            structure=structure,
+            iterations=outside,
+        )
+        if outside
+        else mask_large
     )
+    inner = (
+        ndimage.binary_erosion(
+            mask_large,
+            structure=structure,
+            iterations=inside,
+            border_value=0,
+        )
+        if inside
+        else mask_large
+    )
+    alpha_large = (outer & ~inner).astype(np.uint8) * 255
     alpha = (
         np.asarray(
             Image.fromarray(alpha_large).resize(
