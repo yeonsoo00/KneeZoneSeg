@@ -20,9 +20,10 @@ ZONE_COLORS = {
     "GP": (255, 165, 0),
 }
 
-INDIVIDUAL_CONTOUR_WIDTH = 2.0 * 0.70
+CONTOUR_WIDTH = 2.0 * 0.70
 CONTOUR_SUPERSAMPLE = 5
 MAX_VISUALIZATION_DIMENSION = 4096
+APP_PREVIEW_MAX_DIMENSION = 440
 
 # Each entry is (filename/preview label, stains to normalize and average).
 # Keeping the recipes here ensures the GUI preview and saved exports use the
@@ -62,12 +63,15 @@ def _signal_paths(
 
 def _visualization_shape(
     signal_paths: str | Path | Iterable[str | Path],
+    max_dimension: int,
 ) -> tuple[int, int]:
-    """Return the first background's native shape, capped for safe rendering."""
+    """Return the first background's shape, capped to the requested dimension."""
+    if max_dimension < 1:
+        raise ValueError("max_dimension must be positive")
     first = _signal_paths(signal_paths)[0]
     with Image.open(first) as image:
         width, height = image.size
-    scale = min(1.0, MAX_VISUALIZATION_DIMENSION / max(width, height))
+    scale = min(1.0, max_dimension / max(width, height))
     return max(1, round(height * scale)), max(1, round(width * scale))
 
 
@@ -139,30 +143,6 @@ def _default_font(size: int) -> ImageFont.ImageFont:
         return ImageFont.load_default()
 
 
-def _binary_erosion_3x3(mask: np.ndarray) -> np.ndarray:
-    padded = np.pad(mask.astype(bool), 1, mode="constant", constant_values=False)
-    neighborhoods = [
-        padded[dy : dy + mask.shape[0], dx : dx + mask.shape[1]]
-        for dy in range(3)
-        for dx in range(3)
-    ]
-    return np.logical_and.reduce(neighborhoods)
-
-
-def _contour(mask: np.ndarray, thickness: int = 1) -> np.ndarray:
-    boundary = mask.astype(bool) & ~_binary_erosion_3x3(mask)
-    for _ in range(max(0, thickness - 1)):
-        padded = np.pad(boundary, 1, mode="constant")
-        boundary = np.logical_or.reduce(
-            [
-                padded[dy : dy + mask.shape[0], dx : dx + mask.shape[1]]
-                for dy in range(3)
-                for dx in range(3)
-            ]
-        )
-    return boundary
-
-
 def _blend(
     canvas: np.ndarray, mask: np.ndarray, color: tuple[int, int, int], alpha: float
 ) -> None:
@@ -232,11 +212,16 @@ def _draw_antialiased_contour(
 def render_zone_measurement(
     signal_path: str | Path | Iterable[str | Path],
     result: ZoneResult,
+    *,
+    max_dimension: int = MAX_VISUALIZATION_DIMENSION,
 ) -> Image.Image:
     """Render one zone at the background's native/high-resolution dimensions."""
-    target_shape = _visualization_shape(signal_path)
+    target_shape = _visualization_shape(signal_path, max_dimension)
     mask = _resize_mask(result.mask, target_shape)
     resolution_scale = _resolution_scale(result.mask.shape, target_shape)
+    display_scale = (
+        1.0 if max_dimension <= APP_PREVIEW_MAX_DIMENSION else resolution_scale
+    )
     canvas = _load_background(signal_path, target_shape)
     color = ZONE_COLORS[result.name]
     _blend(canvas, mask, color, 0.28)
@@ -244,11 +229,11 @@ def render_zone_measurement(
         canvas,
         mask,
         (255, 35, 35),
-        INDIVIDUAL_CONTOUR_WIDTH * resolution_scale,
+        CONTOUR_WIDTH * display_scale,
     )
     image = Image.fromarray(canvas, mode="RGB")
     draw = ImageDraw.Draw(image)
-    annotation_scale = min(resolution_scale, 4.0)
+    annotation_scale = min(display_scale, 4.0)
     font = _default_font(max(10, round(10 * annotation_scale)))
     margin = max(5, round(5 * annotation_scale))
     inset = max(5, round(5 * annotation_scale))
@@ -276,13 +261,18 @@ def render_zone_measurement(
 def render_all_zones(
     signal_path: str | Path | Iterable[str | Path],
     results: Mapping[str, ZoneResult],
+    *,
+    max_dimension: int = MAX_VISUALIZATION_DIMENSION,
 ) -> Image.Image:
     """Render the total five-zone visualization with colored contour outlines."""
     if not results:
         raise ValueError("There are no zone results to visualize")
     source_shape = next(iter(results.values())).mask.shape
-    shape = _visualization_shape(signal_path)
+    shape = _visualization_shape(signal_path, max_dimension)
     resolution_scale = _resolution_scale(source_shape, shape)
+    display_scale = (
+        1.0 if max_dimension <= APP_PREVIEW_MAX_DIMENSION else resolution_scale
+    )
     canvas = _load_background(signal_path, shape)
 
     # GP spans the full plate, so draw it first with a lighter fill. The four
@@ -297,10 +287,14 @@ def render_all_zones(
         alpha = 0.08 if name == "GP" else 0.28
         _blend(canvas, resized_masks[name], ZONE_COLORS[name], alpha)
     for name in order:
-        contour_width = max(1, round(2 * resolution_scale))
-        canvas[_contour(resized_masks[name], contour_width)] = ZONE_COLORS[name]
+        _draw_antialiased_contour(
+            canvas,
+            resized_masks[name],
+            ZONE_COLORS[name],
+            CONTOUR_WIDTH * display_scale,
+        )
 
-    legend_scale = min(resolution_scale, 4.0)
+    legend_scale = min(display_scale, 4.0)
     legend_width = round(190 * legend_scale)
     height, width = shape
     total = Image.new("RGB", (width + legend_width, height), "white")
@@ -364,7 +358,9 @@ def save_zone_visualizations(
     mask_dir = output_dir / "masks"
     visualization_dir = output_dir / "visualizations"
     visualization_dir.mkdir(parents=True, exist_ok=True)
-    high_resolution_shape = _visualization_shape(signal_dir / "sfo.png")
+    high_resolution_shape = _visualization_shape(
+        signal_dir / "sfo.png", MAX_VISUALIZATION_DIMENSION
+    )
     high_resolution_size = (
         high_resolution_shape[1],
         high_resolution_shape[0],

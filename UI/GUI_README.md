@@ -101,6 +101,10 @@ Visualizations use the formatted background's native resolution, capped at
 4096 pixels on the longest edge for memory safety. Model-resolution zone masks
 are resized to the visualization dimensions with nearest-neighbor sampling;
 the exported binary zone masks use the same high-resolution SFO dimensions.
+The in-app preview is rendered separately with a 440-pixel background limit so
+the complete image fits in the visualization panel without scrolling. Saved
+files retain the high-resolution dimensions. Individual and all-zones contour
+outlines use the same relative line thickness.
 
 The same presentation workflow is available in `test.ipynb`. Its final cell is
 named `# With contour outline — save the total five-zone visualization` and

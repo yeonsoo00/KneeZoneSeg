@@ -84,7 +84,7 @@ application = BUNDLE(
     name="ZS.app",
     icon=str(ICON_ICNS),
     bundle_identifier="org.kneezoneseg.zs",
-    version="1.0.3",
+    version="1.0.4",
     info_plist={
         "CFBundleDisplayName": "ZS",
         "CFBundleName": "ZS",

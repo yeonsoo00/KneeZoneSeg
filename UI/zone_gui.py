@@ -44,6 +44,7 @@ from zone_metrics import (
     export_zone_csv,
 )
 from zone_visualization import (
+    APP_PREVIEW_MAX_DIMENSION,
     ZONE_BACKGROUND_RECIPES,
     background_paths,
     render_all_zones,
@@ -500,7 +501,9 @@ class AnalysisWindow(QMainWindow):
             )
             self.visualizations = {
                 "All zones (SFO)": render_all_zones(
-                    self.signal_dir / "sfo.png", self.results
+                    self.signal_dir / "sfo.png",
+                    self.results,
+                    max_dimension=APP_PREVIEW_MAX_DIMENSION,
                 )
             }
             for name, recipes in ZONE_BACKGROUND_RECIPES.items():
@@ -509,7 +512,9 @@ class AnalysisWindow(QMainWindow):
                 for background_name, stains in recipes:
                     label = f"{name} ({background_name.replace('_', '+')})"
                     self.visualizations[label] = render_zone_measurement(
-                        background_paths(self.signal_dir, stains), self.results[name]
+                        background_paths(self.signal_dir, stains),
+                        self.results[name],
+                        max_dimension=APP_PREVIEW_MAX_DIMENSION,
                     )
         except Exception as exc:
             self._error(str(exc))
