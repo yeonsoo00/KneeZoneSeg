@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
 
 from zone_metrics import ZoneResult, save_zone_masks
@@ -22,6 +22,7 @@ ZONE_COLORS = {
 
 INDIVIDUAL_CONTOUR_WIDTH = 2.0 * 0.70
 CONTOUR_SUPERSAMPLE = 5
+MAX_VISUALIZATION_DIMENSION = 4096
 
 # Each entry is (filename/preview label, stains to normalize and average).
 # Keeping the recipes here ensures the GUI preview and saved exports use the
@@ -39,6 +40,35 @@ ZONE_BACKGROUND_RECIPES = {
     ),
     "Hypertrophic": (("Mineral_SFO", ("mineral", "sfo")),),
 }
+
+
+def _signal_paths(
+    signal_paths: str | Path | Iterable[str | Path],
+) -> tuple[Path, ...]:
+    if isinstance(signal_paths, (str, Path)):
+        paths = (Path(signal_paths),)
+    else:
+        paths = tuple(Path(path) for path in signal_paths)
+    if not paths:
+        raise ValueError("At least one background signal is required")
+    missing = [path for path in paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "Required visualization background was not found: "
+            + ", ".join(str(path) for path in missing)
+        )
+    return paths
+
+
+def _visualization_shape(
+    signal_paths: str | Path | Iterable[str | Path],
+) -> tuple[int, int]:
+    """Return the first background's native shape, capped for safe rendering."""
+    first = _signal_paths(signal_paths)[0]
+    with Image.open(first) as image:
+        width, height = image.size
+    scale = min(1.0, MAX_VISUALIZATION_DIMENSION / max(width, height))
+    return max(1, round(height * scale)), max(1, round(width * scale))
 
 
 def _load_one_background(signal_path: str | Path, shape: tuple[int, int]) -> np.ndarray:
@@ -63,18 +93,7 @@ def _load_background(
     shape: tuple[int, int],
 ) -> np.ndarray:
     """Normalize each requested signal independently and average its RGB image."""
-    if isinstance(signal_paths, (str, Path)):
-        paths = (Path(signal_paths),)
-    else:
-        paths = tuple(Path(path) for path in signal_paths)
-    if not paths:
-        raise ValueError("At least one background signal is required")
-    missing = [path for path in paths if not path.is_file()]
-    if missing:
-        raise FileNotFoundError(
-            "Required visualization background was not found: "
-            + ", ".join(str(path) for path in missing)
-        )
+    paths = _signal_paths(signal_paths)
     normalized = [
         _load_one_background(path, shape).astype(np.float32) for path in paths
     ]
@@ -88,6 +107,36 @@ def background_paths(
     """Resolve a stain recipe to the formatted input PNG files."""
     signal_dir = Path(signal_dir)
     return tuple(signal_dir / f"{stain.casefold()}.png" for stain in stains)
+
+
+def _resize_mask(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """Resize a binary mask without creating interpolated label values."""
+    height, width = shape
+    if mask.shape == shape:
+        return mask.astype(bool, copy=False)
+    image = Image.fromarray(mask.astype(np.uint8) * 255, mode="L")
+    return (
+        np.asarray(
+            image.resize((width, height), Image.Resampling.NEAREST), dtype=np.uint8
+        )
+        > 0
+    )
+
+
+def _resolution_scale(
+    source_shape: tuple[int, int], target_shape: tuple[int, int]
+) -> float:
+    """Geometric pixel scale used to preserve relative line and text sizes."""
+    source_h, source_w = source_shape
+    target_h, target_w = target_shape
+    return max(1.0, ((target_h / source_h) * (target_w / source_w)) ** 0.5)
+
+
+def _default_font(size: int) -> ImageFont.ImageFont:
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # Pillow < 10 compatibility for source installations.
+        return ImageFont.load_default()
 
 
 def _binary_erosion_3x3(mask: np.ndarray) -> np.ndarray:
@@ -134,7 +183,9 @@ def _draw_antialiased_contour(
     height, image_width = mask.shape
     if not mask.any():
         return
-    scale = CONTOUR_SUPERSAMPLE
+    scale = (
+        CONTOUR_SUPERSAMPLE if width < 2.0 and max(height, image_width) <= 1024 else 1
+    )
     mask_large = np.repeat(np.repeat(mask.astype(bool), scale, axis=0), scale, axis=1)
     thickness = max(1, round(width * scale))
     outside = thickness // 2
@@ -182,27 +233,43 @@ def render_zone_measurement(
     signal_path: str | Path | Iterable[str | Path],
     result: ZoneResult,
 ) -> Image.Image:
-    """Render one zone with a compact red contour and summary annotation."""
-    canvas = _load_background(signal_path, result.mask.shape)
+    """Render one zone at the background's native/high-resolution dimensions."""
+    target_shape = _visualization_shape(signal_path)
+    mask = _resize_mask(result.mask, target_shape)
+    resolution_scale = _resolution_scale(result.mask.shape, target_shape)
+    canvas = _load_background(signal_path, target_shape)
     color = ZONE_COLORS[result.name]
-    _blend(canvas, result.mask, color, 0.28)
+    _blend(canvas, mask, color, 0.28)
     _draw_antialiased_contour(
         canvas,
-        result.mask,
+        mask,
         (255, 35, 35),
-        INDIVIDUAL_CONTOUR_WIDTH,
+        INDIVIDUAL_CONTOUR_WIDTH * resolution_scale,
     )
     image = Image.fromarray(canvas, mode="RGB")
     draw = ImageDraw.Draw(image)
+    annotation_scale = min(resolution_scale, 4.0)
+    font = _default_font(max(10, round(10 * annotation_scale)))
+    margin = max(5, round(5 * annotation_scale))
+    inset = max(5, round(5 * annotation_scale))
     text = (
         f"{result.name} ({result.boundary_1}-{result.boundary_2})\n"
         f"central 90%; area {result.area_px:,} px2\n"
         f"thickness mean {result.mean_thickness_px:.1f} px; "
         f"median {result.median_thickness_px:.1f} px"
     )
-    box = draw.textbbox((0, 0), text)
-    draw.rectangle((5, 5, box[2] + 15, box[3] + 15), fill=(255, 255, 255))
-    draw.multiline_text((10, 10), text, fill=(0, 0, 0), spacing=3)
+    box = draw.multiline_textbbox((0, 0), text, font=font, spacing=3)
+    draw.rectangle(
+        (margin, margin, box[2] + margin + 2 * inset, box[3] + margin + 2 * inset),
+        fill=(255, 255, 255),
+    )
+    draw.multiline_text(
+        (margin + inset, margin + inset),
+        text,
+        fill=(0, 0, 0),
+        font=font,
+        spacing=3,
+    )
     return image
 
 
@@ -213,7 +280,9 @@ def render_all_zones(
     """Render the total five-zone visualization with colored contour outlines."""
     if not results:
         raise ValueError("There are no zone results to visualize")
-    shape = next(iter(results.values())).mask.shape
+    source_shape = next(iter(results.values())).mask.shape
+    shape = _visualization_shape(signal_path)
+    resolution_scale = _resolution_scale(source_shape, shape)
     canvas = _load_background(signal_path, shape)
 
     # GP spans the full plate, so draw it first with a lighter fill. The four
@@ -223,31 +292,57 @@ def render_all_zones(
         for name in ("GP", "Germinal", "Columnar", "Pre-hypertrophic", "Hypertrophic")
         if name in results
     ]
+    resized_masks = {name: _resize_mask(results[name].mask, shape) for name in order}
     for name in order:
-        result = results[name]
         alpha = 0.08 if name == "GP" else 0.28
-        _blend(canvas, result.mask, ZONE_COLORS[name], alpha)
+        _blend(canvas, resized_masks[name], ZONE_COLORS[name], alpha)
     for name in order:
-        canvas[_contour(results[name].mask, 2)] = ZONE_COLORS[name]
+        contour_width = max(1, round(2 * resolution_scale))
+        canvas[_contour(resized_masks[name], contour_width)] = ZONE_COLORS[name]
 
-    legend_width = 190
+    legend_scale = min(resolution_scale, 4.0)
+    legend_width = round(190 * legend_scale)
     height, width = shape
     total = Image.new("RGB", (width + legend_width, height), "white")
     total.paste(Image.fromarray(canvas, mode="RGB"), (0, 0))
     draw = ImageDraw.Draw(total)
-    draw.text((width + 14, 18), "Growth-plate zones", fill=(0, 0, 0))
-    y = 50
+    font = _default_font(max(10, round(10 * legend_scale)))
+    x_padding = round(14 * legend_scale)
+    draw.text(
+        (width + x_padding, round(18 * legend_scale)),
+        "Growth-plate zones",
+        fill=(0, 0, 0),
+        font=font,
+    )
+    y = round(50 * legend_scale)
     for name in ("Germinal", "Columnar", "Pre-hypertrophic", "Hypertrophic", "GP"):
         if name not in results:
             continue
         color = ZONE_COLORS[name]
-        draw.rectangle((width + 14, y, width + 34, y + 14), fill=color, outline=color)
-        draw.text((width + 42, y), name, fill=(0, 0, 0))
-        y += 28
+        swatch_width = round(20 * legend_scale)
+        swatch_height = round(14 * legend_scale)
+        draw.rectangle(
+            (
+                width + x_padding,
+                y,
+                width + x_padding + swatch_width,
+                y + swatch_height,
+            ),
+            fill=color,
+            outline=color,
+        )
+        draw.text(
+            (width + round(42 * legend_scale), y),
+            name,
+            fill=(0, 0, 0),
+            font=font,
+        )
+        y += round(28 * legend_scale)
     draw.text(
-        (width + 14, y + 12),
+        (width + x_padding, y + round(12 * legend_scale)),
         "5% removed from\neach horizontal edge",
         fill=(55, 55, 55),
+        font=font,
         spacing=3,
     )
     return total
@@ -269,7 +364,12 @@ def save_zone_visualizations(
     mask_dir = output_dir / "masks"
     visualization_dir = output_dir / "visualizations"
     visualization_dir.mkdir(parents=True, exist_ok=True)
-    paths = save_zone_masks(results, mask_dir)
+    high_resolution_shape = _visualization_shape(signal_dir / "sfo.png")
+    high_resolution_size = (
+        high_resolution_shape[1],
+        high_resolution_shape[0],
+    )
+    paths = save_zone_masks(results, mask_dir, size=high_resolution_size)
     for name, recipes in ZONE_BACKGROUND_RECIPES.items():
         if name not in results:
             continue

@@ -288,12 +288,21 @@ def export_zone_csv(results: Mapping[str, ZoneResult], destination: str | Path) 
     return destination
 
 
-def save_zone_masks(results: Mapping[str, ZoneResult], output_dir: str | Path) -> list[Path]:
+def save_zone_masks(
+    results: Mapping[str, ZoneResult],
+    output_dir: str | Path,
+    *,
+    size: tuple[int, int] | None = None,
+) -> list[Path]:
+    """Save binary zone masks, optionally resized with nearest-neighbor sampling."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     for name, result in results.items():
         path = output_dir / ZONE_FILENAMES[name]
-        Image.fromarray(result.mask.astype(np.uint8) * 255, mode="L").save(path)
+        image = Image.fromarray(result.mask.astype(np.uint8) * 255, mode="L")
+        if size is not None and image.size != size:
+            image = image.resize(size, Image.Resampling.NEAREST)
+        image.save(path)
         paths.append(path)
     return paths

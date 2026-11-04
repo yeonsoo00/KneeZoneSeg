@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
@@ -66,6 +67,7 @@ DEFAULT_OUTPUT_DIR = (
 DEFAULT_OUTPUT_PLACEHOLDER = "KneeZoneSeg/Prediction"
 DEFAULT_CHECKPOINT_PLACEHOLDER = "ckpt/best_model_ch48_super.pth"
 LAYERED_SUFFIXES = frozenset({".psd", ".psb", ".pxd"})
+RASTER_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
 
 
 def default_checkpoint() -> Path:
@@ -195,12 +197,31 @@ class AnalysisWindow(QMainWindow):
         layout.addWidget(button)
         return widget
 
+    def _input_path_row(self) -> QWidget:
+        """Create one input Browse button for files and recursive directories."""
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.input_path, 1)
+        button = QPushButton("Browse…")
+        button.setObjectName("inputBrowseButton")
+        button.setFixedWidth(button.sizeHint().width() + 18)
+        menu = QMenu(button)
+        file_action = menu.addAction("Choose PSD/PSB/PXD or PNG/JPG…")
+        file_action.triggered.connect(self.choose_input_file)
+        directory_action = menu.addAction("Choose recursive directory…")
+        directory_action.triggered.connect(self.choose_input_directory)
+        button.setMenu(menu)
+        button.setToolTip("Choose a supported file or a recursive input directory")
+        layout.addWidget(button)
+        return widget
+
     def _build_prediction_box(self) -> QGroupBox:
         box = QGroupBox("1. Final-model prediction")
         layout = QGridLayout(box)
         self.input_path = QLineEdit()
         self.input_path.setPlaceholderText(
-            "PSD/PSB/PXD file, or recursive directory of layered files and JPG/PNG sample folders"
+            "PSD/PSB/PXD or PNG/JPG file, or recursive input directory"
         )
         self.output_path = QLineEdit()
         self.output_path.setPlaceholderText(DEFAULT_OUTPUT_PLACEHOLDER)
@@ -209,14 +230,7 @@ class AnalysisWindow(QMainWindow):
         self.checkpoint_path.setPlaceholderText(DEFAULT_CHECKPOINT_PLACEHOLDER)
 
         layout.addWidget(QLabel("Input"), 0, 0)
-        layout.addWidget(
-            self._path_row(self.input_path, self.choose_input_directory), 0, 1
-        )
-        file_button = QPushButton("Browse…")
-        file_button.setFixedWidth(file_button.sizeHint().width())
-        file_button.setToolTip("Choose one layered PSD, PSB, or PXD file")
-        file_button.clicked.connect(self.choose_input_file)
-        layout.addWidget(file_button, 0, 2)
+        layout.addWidget(self._input_path_row(), 0, 1, 1, 2)
         layout.addWidget(QLabel("Prediction output"), 1, 0)
         layout.addWidget(
             self._path_row(self.output_path, self.choose_output_directory), 1, 1, 1, 2
@@ -338,8 +352,12 @@ class AnalysisWindow(QMainWindow):
     def choose_input_file(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
             self,
-            "Choose a layered PSD, PSB, or PXD",
-            filter="Layered images (*.psd *.psb *.pxd)",
+            "Choose an input file",
+            filter=(
+                "Supported inputs (*.psd *.psb *.pxd *.png *.jpg *.jpeg);;"
+                "Layered images (*.psd *.psb *.pxd);;"
+                "Raster images (*.png *.jpg *.jpeg)"
+            ),
         )
         if selected:
             self._set_input(Path(selected))
@@ -372,20 +390,27 @@ class AnalysisWindow(QMainWindow):
 
     def run_prediction(self) -> None:
         input_text = self.input_path.text().strip()
-        input_root = Path(input_text).expanduser()
+        selected_input = Path(input_text).expanduser()
+        input_root = (
+            selected_input.parent
+            if selected_input.is_file()
+            and selected_input.suffix.casefold() in RASTER_SUFFIXES
+            else selected_input
+        )
         output_root = self._output_root()
         checkpoint = self._checkpoint()
         if (
             not input_text
-            or not input_root.exists()
+            or not selected_input.exists()
             or (
-                input_root.is_file()
-                and input_root.suffix.casefold() not in LAYERED_SUFFIXES
+                selected_input.is_file()
+                and selected_input.suffix.casefold()
+                not in LAYERED_SUFFIXES | RASTER_SUFFIXES
             )
         ):
             self._error(
-                "Choose a valid PSD/PSB/PXD file or a directory containing "
-                "layered files and/or JPG/PNG sample folders."
+                "Choose a valid PSD/PSB/PXD/PNG/JPG file or a directory "
+                "containing layered files and/or JPG/PNG sample folders."
             )
             return
         if not checkpoint.is_file():

@@ -25,8 +25,10 @@ Launch the application from the `KneeZoneSeg/UI` directory:
 python3 analyze_qt6.py
 ```
 
-1. Choose one layered PSD/PSB/PXD file, or a directory. Directory input is
-   recursive and may mix layered files with sample folders of JPG/PNG signals.
+1. Use the single input **Browse** button to choose one PSD/PSB/PXD file, one
+   PNG/JPG signal from a raster sample folder, or a directory. Choosing a
+   raster file uses its containing signal folder as the sample. Directory input
+   is recursive and may mix layered files with sample folders of JPG/PNG signals.
    Each layered document is one sample. Its layers must start with `1_` through `9_`:
    1=Mineral, 2=AC, 3=Calcein, 4=TRAP, 5=DAPI, 6=AP, 7=EdU, 8=CFO,
    and 9=SFO. Text after the underscore is ignored.
@@ -95,6 +97,10 @@ Pixel values and physical units are both exported. The default calibration is
 For a two-stain background, each stain image is contrast-normalized separately
 and the two RGB arrays are averaged equally. Individual zone visualizations
 retain the thin red contour and do not draw measurement or edge guide lines.
+Visualizations use the formatted background's native resolution, capped at
+4096 pixels on the longest edge for memory safety. Model-resolution zone masks
+are resized to the visualization dimensions with nearest-neighbor sampling;
+the exported binary zone masks use the same high-resolution SFO dimensions.
 
 The same presentation workflow is available in `test.ipynb`. Its final cell is
 named `# With contour outline — save the total five-zone visualization` and
