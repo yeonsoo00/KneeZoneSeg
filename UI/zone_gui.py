@@ -43,6 +43,8 @@ from zone_metrics import (
     export_zone_csv,
 )
 from zone_visualization import (
+    ZONE_BACKGROUND_RECIPES,
+    background_paths,
     render_all_zones,
     render_zone_measurement,
     save_zone_visualizations,
@@ -165,6 +167,7 @@ class AnalysisWindow(QMainWindow):
         self.resize(1480, 900)
         self.worker = None
         self.results = None
+        self.signal_dir = None
         self.signal_path = None
         self.visualizations = {}
         self._preview_pixmap = None
@@ -439,6 +442,7 @@ class AnalysisWindow(QMainWindow):
 
     def _clear_analysis(self, *_args) -> None:
         self.results = None
+        self.signal_dir = None
         self.signal_path = None
         self.visualizations.clear()
         self._preview_pixmap = None
@@ -458,11 +462,9 @@ class AnalysisWindow(QMainWindow):
             return
         output_root = self._output_root()
         prediction_dir = output_root / sample
+        self.signal_dir = output_root / "_formatted_input" / sample
         self.signal_path = (
-            output_root
-            / "_formatted_input"
-            / sample
-            / f"{self.background_combo.currentText()}.png"
+            self.signal_dir / f"{self.background_combo.currentText()}.png"
         )
         try:
             self.results = analyze_zones(
@@ -472,19 +474,25 @@ class AnalysisWindow(QMainWindow):
                 pixel_size_um=self.pixel_size.value(),
             )
             self.visualizations = {
-                "All zones": render_all_zones(self.signal_path, self.results)
-            }
-            for name, result in self.results.items():
-                self.visualizations[name] = render_zone_measurement(
-                    self.signal_path, result
+                "All zones (SFO)": render_all_zones(
+                    self.signal_dir / "sfo.png", self.results
                 )
+            }
+            for name, recipes in ZONE_BACKGROUND_RECIPES.items():
+                if name not in self.results:
+                    continue
+                for background_name, stains in recipes:
+                    label = f"{name} ({background_name.replace('_', '+')})"
+                    self.visualizations[label] = render_zone_measurement(
+                        background_paths(self.signal_dir, stains), self.results[name]
+                    )
         except Exception as exc:
             self._error(str(exc))
             return
         self._fill_table()
         self.visualization_combo.addItems(self.visualizations)
-        self.visualization_combo.setCurrentText("All zones")
-        self._show_visualization("All zones")
+        self.visualization_combo.setCurrentText("All zones (SFO)")
+        self._show_visualization("All zones (SFO)")
         self.csv_button.setEnabled(True)
         self.visualization_button.setEnabled(True)
         self.status_label.setText("Five-zone analysis completed using the central 90%")
@@ -559,7 +567,7 @@ class AnalysisWindow(QMainWindow):
             )
             try:
                 paths = save_zone_visualizations(
-                    self.signal_path, self.results, output_dir
+                    self.signal_dir, self.results, output_dir
                 )
                 csv_path = export_zone_csv(
                     self.results, output_dir / "zone_measurements.csv"

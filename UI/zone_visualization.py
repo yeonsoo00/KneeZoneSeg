@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -23,8 +23,25 @@ ZONE_COLORS = {
 INDIVIDUAL_CONTOUR_WIDTH = 2.0 * 0.70
 CONTOUR_SUPERSAMPLE = 5
 
+# Each entry is (filename/preview label, stains to normalize and average).
+# Keeping the recipes here ensures the GUI preview and saved exports use the
+# same biologically relevant backgrounds.
+ZONE_BACKGROUND_RECIPES = {
+    "GP": (("SFO_CFO", ("sfo", "cfo")),),
+    "Germinal": (
+        ("SFO_CFO", ("sfo", "cfo")),
+        ("AP_DAPI", ("ap", "dapi")),
+    ),
+    "Columnar": (("AP_DAPI", ("ap", "dapi")),),
+    "Pre-hypertrophic": (
+        ("AP_DAPI", ("ap", "dapi")),
+        ("Mineral", ("mineral",)),
+    ),
+    "Hypertrophic": (("Mineral_SFO", ("mineral", "sfo")),),
+}
 
-def _load_background(signal_path: str | Path, shape: tuple[int, int]) -> np.ndarray:
+
+def _load_one_background(signal_path: str | Path, shape: tuple[int, int]) -> np.ndarray:
     height, width = shape
     image = (
         Image.open(signal_path)
@@ -39,6 +56,38 @@ def _load_background(signal_path: str | Path, shape: tuple[int, int]) -> np.ndar
     if high <= low:
         return np.clip(array, 0, 255).astype(np.uint8)
     return (np.clip((array - low) / (high - low), 0, 1) * 255).astype(np.uint8)
+
+
+def _load_background(
+    signal_paths: str | Path | Iterable[str | Path],
+    shape: tuple[int, int],
+) -> np.ndarray:
+    """Normalize each requested signal independently and average its RGB image."""
+    if isinstance(signal_paths, (str, Path)):
+        paths = (Path(signal_paths),)
+    else:
+        paths = tuple(Path(path) for path in signal_paths)
+    if not paths:
+        raise ValueError("At least one background signal is required")
+    missing = [path for path in paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "Required visualization background was not found: "
+            + ", ".join(str(path) for path in missing)
+        )
+    normalized = [
+        _load_one_background(path, shape).astype(np.float32) for path in paths
+    ]
+    return np.rint(np.mean(normalized, axis=0)).astype(np.uint8)
+
+
+def background_paths(
+    signal_dir: str | Path,
+    stains: Iterable[str],
+) -> tuple[Path, ...]:
+    """Resolve a stain recipe to the formatted input PNG files."""
+    signal_dir = Path(signal_dir)
+    return tuple(signal_dir / f"{stain.casefold()}.png" for stain in stains)
 
 
 def _binary_erosion_3x3(mask: np.ndarray) -> np.ndarray:
@@ -130,7 +179,7 @@ def _draw_antialiased_contour(
 
 
 def render_zone_measurement(
-    signal_path: str | Path,
+    signal_path: str | Path | Iterable[str | Path],
     result: ZoneResult,
 ) -> Image.Image:
     """Render one zone with a compact red contour and summary annotation."""
@@ -158,7 +207,7 @@ def render_zone_measurement(
 
 
 def render_all_zones(
-    signal_path: str | Path,
+    signal_path: str | Path | Iterable[str | Path],
     results: Mapping[str, ZoneResult],
 ) -> Image.Image:
     """Render the total five-zone visualization with colored contour outlines."""
@@ -205,22 +254,35 @@ def render_all_zones(
 
 
 def save_zone_visualizations(
-    signal_path: str | Path,
+    signal_source: str | Path,
     results: Mapping[str, ZoneResult],
     output_dir: str | Path,
 ) -> list[Path]:
-    """Save zone masks, individual measurements, and total contour view."""
+    """Save masks and the fixed stain-recipe visualizations for every zone.
+
+    ``signal_source`` may be the formatted sample directory or one signal file
+    inside it. Accepting a file retains compatibility with the notebook API.
+    """
+    signal_source = Path(signal_source)
+    signal_dir = signal_source if signal_source.is_dir() else signal_source.parent
     output_dir = Path(output_dir)
     mask_dir = output_dir / "masks"
     visualization_dir = output_dir / "visualizations"
     visualization_dir.mkdir(parents=True, exist_ok=True)
     paths = save_zone_masks(results, mask_dir)
-    for name, result in results.items():
-        filename = name.replace("-", "_") + "_measurement.png"
-        path = visualization_dir / filename
-        render_zone_measurement(signal_path, result).save(path)
-        paths.append(path)
-    total_path = visualization_dir / "All_zones_contour_overlay.png"
-    render_all_zones(signal_path, results).save(total_path)
+    for name, recipes in ZONE_BACKGROUND_RECIPES.items():
+        if name not in results:
+            continue
+        zone_name = name.replace("-", "_")
+        for background_name, stains in recipes:
+            path = visualization_dir / (
+                f"{zone_name}_{background_name}_measurement.png"
+            )
+            render_zone_measurement(
+                background_paths(signal_dir, stains), results[name]
+            ).save(path)
+            paths.append(path)
+    total_path = visualization_dir / "All_zones_SFO_contour_overlay.png"
+    render_all_zones(signal_dir / "sfo.png", results).save(total_path)
     paths.append(total_path)
     return paths

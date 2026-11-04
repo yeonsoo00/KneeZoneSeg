@@ -40,7 +40,8 @@ python3 analyze_qt6.py
    both formatted signals and prediction folders, preventing duplicate sample
    names in different directories from overwriting one another.
 4. Choose a sample and analysis background (SFO by default), then click
-   **Analyze five zones**.
+   **Analyze five zones**. This selection controls the signal measurements in
+   the table/CSV; visualization backgrounds use the fixed recipes below.
 5. Use **Export measurements to CSV** and **Save zone visualizations** to save
    the table, binary zone masks, individual measurement images, and the total
    colored contour visualization.
@@ -58,10 +59,19 @@ compatible launcher name.
 | Hypertrophic | `1c`–`9d` |
 | GP | `9a`–`9d` |
 
-Each zone is filled column-by-column between the interpolated centerlines of
-its two boundary masks. The analysis uses their common horizontal support and
-automatically removes 5% from the left edge and 5% from the right edge. There
-is no manual range/reset control and no pairwise gap analysis.
+Each boundary centerline is the median y-coordinate of its mask in each image
+column; missing columns are linearly interpolated. Each zone is filled
+column-by-column between its two centerlines. The analysis uses the boundaries'
+common horizontal support and automatically removes 5% from the left edge and
+5% from the right edge. There is no manual range/reset control and no pairwise
+gap analysis.
+
+Thickness is measured vertically in every retained x-column as
+`bottom y - top y + 1`. Mean, median, population standard deviation, minimum,
+and maximum are calculated across those column thicknesses. Values in µm are
+the pixel measurements multiplied by the selected pixel size (3.45 µm/pixel by
+default). Thickness is therefore an image-column measurement, not a distance
+measured perpendicular to the local curved boundary.
 
 ## Measurements and exports
 
@@ -73,11 +83,18 @@ Pixel values and physical units are both exported. The default calibration is
 **Save zone visualizations** writes:
 
 - the five binary zone masks;
-- one measurement visualization per zone, with a thin red contour and no
-  measurement or edge guide lines;
-- `All_zones_contour_overlay.png`, containing all five colored zones and their
-  contour outlines;
+- GP on an SFO+CFO background;
+- Germinal on both SFO+CFO and AP+DAPI backgrounds;
+- Columnar on an AP+DAPI background;
+- Pre-hypertrophic on both AP+DAPI and Mineral backgrounds;
+- Hypertrophic on a Mineral+SFO background;
+- `All_zones_SFO_contour_overlay.png`, containing all five colored zones and
+  their contour outlines on SFO;
 - `zone_measurements.csv`.
+
+For a two-stain background, each stain image is contrast-normalized separately
+and the two RGB arrays are averaged equally. Individual zone visualizations
+retain the thin red contour and do not draw measurement or edge guide lines.
 
 The same presentation workflow is available in `test.ipynb`. Its final cell is
 named `# With contour outline — save the total five-zone visualization` and
