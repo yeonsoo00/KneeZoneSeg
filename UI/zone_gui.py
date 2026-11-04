@@ -38,7 +38,6 @@ from PyQt6.QtWidgets import (
 from zone_metrics import (
     DEFAULT_PIXEL_SIZE_UM,
     SIDE_EXCLUSION,
-    STAINS,
     ZONE_DEFINITIONS,
     analyze_zones,
     export_zone_csv,
@@ -260,17 +259,12 @@ class AnalysisWindow(QMainWindow):
         form = QFormLayout(settings)
         self.sample_combo = QComboBox()
         self.sample_combo.currentTextChanged.connect(self._sample_changed)
-        self.background_combo = QComboBox()
-        self.background_combo.addItems(STAINS)
-        self.background_combo.setCurrentText("sfo")
-        self.background_combo.currentTextChanged.connect(self._clear_analysis)
         self.pixel_size = QDoubleSpinBox()
         self.pixel_size.setRange(0.0001, 1000.0)
         self.pixel_size.setDecimals(4)
         self.pixel_size.setValue(DEFAULT_PIXEL_SIZE_UM)
         self.pixel_size.setSuffix(" µm/px")
         form.addRow("Sample", self.sample_combo)
-        form.addRow("Analysis background", self.background_combo)
         form.addRow("Pixel size", self.pixel_size)
         layout.addWidget(settings)
 
@@ -300,18 +294,19 @@ class AnalysisWindow(QMainWindow):
         action_row.addWidget(self.visualization_button)
         layout.addLayout(action_row)
 
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(
             [
                 "Zone",
                 "Boundaries",
+                "Image H×W",
                 "Area px²",
                 "Width px",
                 "Mean px",
+                "Mean/GP %",
                 "Median px",
                 "SD px",
                 "Min–max px",
-                "Mean signal",
             ]
         )
         self.table.horizontalHeader().setSectionResizeMode(
@@ -489,9 +484,7 @@ class AnalysisWindow(QMainWindow):
         output_root = self._output_root()
         prediction_dir = output_root / sample
         self.signal_dir = output_root / "_formatted_input" / sample
-        self.signal_path = (
-            self.signal_dir / f"{self.background_combo.currentText()}.png"
-        )
+        self.signal_path = self.signal_dir / "sfo.png"
         try:
             self.results = analyze_zones(
                 prediction_dir,
@@ -533,13 +526,14 @@ class AnalysisWindow(QMainWindow):
             values = (
                 result.name,
                 f"{result.boundary_1}–{result.boundary_2}",
+                f"{result.image_height_px} × {result.image_width_px}",
                 f"{result.area_px:,}",
                 str(result.width_px),
                 f"{result.mean_thickness_px:.2f}",
+                f"{result.mean_thickness_percent_gp:.2f}",
                 f"{result.median_thickness_px:.2f}",
                 f"{result.std_thickness_px:.2f}",
                 f"{result.min_thickness_px:.0f}–{result.max_thickness_px:.0f}",
-                f"{result.mean_signal_gray:.2f}",
             )
             for column, value in enumerate(values):
                 self.table.setItem(row, column, QTableWidgetItem(value))

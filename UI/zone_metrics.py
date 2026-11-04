@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import csv
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping
 
@@ -17,7 +17,6 @@ import numpy as np
 from PIL import Image
 
 
-STAINS = ("mineral", "ac", "calcein", "trap", "dapi", "ap", "edu", "cfo", "sfo")
 SIDE_EXCLUSION = 0.05
 DEFAULT_PIXEL_SIZE_UM = 3.45
 
@@ -42,12 +41,14 @@ ZONE_FILENAMES = {
 
 @dataclass(frozen=True)
 class ZoneResult:
-    """Mask, geometry, and signal statistics for one biological zone."""
+    """Resized mask and geometry statistics for one biological zone."""
 
     name: str
     boundary_1: str
     boundary_2: str
     mask: np.ndarray
+    image_height_px: int
+    image_width_px: int
     original_x_start: int
     original_x_end: int
     x_start: int
@@ -62,6 +63,7 @@ class ZoneResult:
     width_um: float
     mean_thickness_px: float
     mean_thickness_um: float
+    mean_thickness_percent_gp: float
     median_thickness_px: float
     median_thickness_um: float
     std_thickness_px: float
@@ -70,16 +72,13 @@ class ZoneResult:
     min_thickness_um: float
     max_thickness_px: float
     max_thickness_um: float
-    mean_signal_gray: float
-    mean_signal_r: float
-    mean_signal_g: float
-    mean_signal_b: float
 
     def csv_row(self) -> dict[str, object]:
         return {
             "Zone": self.name,
             "Boundary_1": self.boundary_1,
             "Boundary_2": self.boundary_2,
+            "Image_size_HxW": f"{self.image_height_px}x{self.image_width_px}",
             "Side_exclusion_each_edge": SIDE_EXCLUSION,
             "Analyzed_x_start": self.x_start,
             "Analyzed_x_end": self.x_end,
@@ -89,6 +88,7 @@ class ZoneResult:
             "Width_um": self.width_um,
             "Mean_thickness_px": self.mean_thickness_px,
             "Mean_thickness_um": self.mean_thickness_um,
+            "Mean_thickness_percent_GP": self.mean_thickness_percent_gp,
             "Median_thickness_px": self.median_thickness_px,
             "Median_thickness_um": self.median_thickness_um,
             "Std_thickness_px": self.std_thickness_px,
@@ -97,10 +97,6 @@ class ZoneResult:
             "Min_thickness_um": self.min_thickness_um,
             "Max_thickness_px": self.max_thickness_px,
             "Max_thickness_um": self.max_thickness_um,
-            "Mean_signal_gray": self.mean_signal_gray,
-            "Mean_signal_R": self.mean_signal_r,
-            "Mean_signal_G": self.mean_signal_g,
-            "Mean_signal_B": self.mean_signal_b,
         }
 
 
@@ -109,6 +105,26 @@ def load_binary_mask(path: str | Path) -> np.ndarray:
     if not path.is_file():
         raise FileNotFoundError(f"Required prediction mask was not found: {path}")
     return np.asarray(Image.open(path).convert("L")) > 0
+
+
+def resize_binary_mask(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """Resize a binary prediction mask to (height, width) without interpolation."""
+    height, width = shape
+    if mask.shape == shape:
+        return mask.astype(bool, copy=False)
+    image = Image.fromarray(mask.astype(np.uint8) * 255, mode="L")
+    resized = image.resize((width, height), Image.Resampling.NEAREST)
+    return np.asarray(resized, dtype=np.uint8) > 0
+
+
+def reference_image_shape(path: str | Path) -> tuple[int, int]:
+    """Return the native (height, width) used as the common measurement grid."""
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Reference image was not found: {path}")
+    with Image.open(path) as image:
+        width, height = image.size
+    return height, width
 
 
 def get_x_extent(mask: np.ndarray) -> tuple[int, int]:
@@ -182,23 +198,11 @@ def create_zone_between_masks(
     return zone, ranges
 
 
-def _load_signal(signal_path: str | Path | None, shape: tuple[int, int]) -> np.ndarray | None:
-    if signal_path is None:
-        return None
-    path = Path(signal_path)
-    if not path.is_file():
-        raise FileNotFoundError(f"Background signal was not found: {path}")
-    height, width = shape
-    image = Image.open(path).convert("RGB").resize((width, height), Image.Resampling.BILINEAR)
-    return np.asarray(image, dtype=np.float32)
-
-
 def _measure_zone(
     name: str,
     boundaries: tuple[str, str],
     mask: np.ndarray,
     ranges: tuple[int, int, int, int],
-    signal_rgb: np.ndarray | None,
     pixel_size_um: float,
 ) -> ZoneResult:
     x_values, tops, bottoms, thicknesses = [], [], [], []
@@ -215,13 +219,6 @@ def _measure_zone(
     values = np.asarray(thicknesses, dtype=np.float32)
     area_px = int(mask.sum())
     width_px = ranges[3] - ranges[2] + 1
-    if signal_rgb is None:
-        mean_r = mean_g = mean_b = mean_gray = float("nan")
-    else:
-        zone_rgb = signal_rgb[mask]
-        mean_r, mean_g, mean_b = (float(v) for v in zone_rgb.mean(axis=0))
-        mean_gray = float((0.299 * zone_rgb[:, 0] + 0.587 * zone_rgb[:, 1] + 0.114 * zone_rgb[:, 2]).mean())
-
     mean_px = float(values.mean())
     median_px = float(np.median(values))
     std_px = float(values.std(ddof=0))
@@ -230,6 +227,7 @@ def _measure_zone(
     return ZoneResult(
         name=name,
         boundary_1=boundaries[0], boundary_2=boundaries[1], mask=mask,
+        image_height_px=mask.shape[0], image_width_px=mask.shape[1],
         original_x_start=ranges[0], original_x_end=ranges[1],
         x_start=ranges[2], x_end=ranges[3],
         thickness_x=np.asarray(x_values, dtype=np.int32),
@@ -239,23 +237,22 @@ def _measure_zone(
         area_px=area_px, area_um2=area_px * pixel_size_um**2,
         width_px=width_px, width_um=width_px * pixel_size_um,
         mean_thickness_px=mean_px, mean_thickness_um=mean_px * pixel_size_um,
+        mean_thickness_percent_gp=float("nan"),
         median_thickness_px=median_px, median_thickness_um=median_px * pixel_size_um,
         std_thickness_px=std_px, std_thickness_um=std_px * pixel_size_um,
         min_thickness_px=min_px, min_thickness_um=min_px * pixel_size_um,
         max_thickness_px=max_px, max_thickness_um=max_px * pixel_size_um,
-        mean_signal_gray=mean_gray, mean_signal_r=mean_r,
-        mean_signal_g=mean_g, mean_signal_b=mean_b,
     )
 
 
 def analyze_zones(
     prediction_dir: str | Path,
-    signal_path: str | Path | None,
+    reference_image_path: str | Path,
     *,
     side_exclusion: float = SIDE_EXCLUSION,
     pixel_size_um: float = DEFAULT_PIXEL_SIZE_UM,
 ) -> OrderedDict[str, ZoneResult]:
-    """Create and measure all five zones from a prediction directory."""
+    """Resize predictions to the reference image, then create and measure zones."""
     if pixel_size_um <= 0:
         raise ValueError("pixel_size_um must be positive")
     prediction_dir = Path(prediction_dir)
@@ -264,15 +261,34 @@ def analyze_zones(
     shapes = {mask.shape for mask in masks.values()}
     if len(shapes) != 1:
         raise ValueError("All required prediction masks must have the same size")
-    shape = next(iter(shapes))
-    signal = _load_signal(signal_path, shape)
+    measurement_shape = reference_image_shape(reference_image_path)
+    masks = {
+        key: resize_binary_mask(mask, measurement_shape)
+        for key, mask in masks.items()
+    }
     results: OrderedDict[str, ZoneResult] = OrderedDict()
     for name, boundaries in ZONE_DEFINITIONS.items():
         zone, ranges = create_zone_between_masks(
             masks[boundaries[0]], masks[boundaries[1]], side_exclusion=side_exclusion
         )
-        results[name] = _measure_zone(name, boundaries, zone, ranges, signal, pixel_size_um)
-    return results
+        results[name] = _measure_zone(
+            name, boundaries, zone, ranges, pixel_size_um
+        )
+    gp_mean = results["GP"].mean_thickness_px
+    if gp_mean <= 0:
+        raise ValueError("GP mean thickness must be positive")
+    return OrderedDict(
+        (
+            name,
+            replace(
+                result,
+                mean_thickness_percent_gp=(
+                    result.mean_thickness_px / gp_mean * 100.0
+                ),
+            ),
+        )
+        for name, result in results.items()
+    )
 
 
 def export_zone_csv(results: Mapping[str, ZoneResult], destination: str | Path) -> Path:
